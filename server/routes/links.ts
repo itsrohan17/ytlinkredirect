@@ -27,14 +27,26 @@ function isValidCustomSlug(slug: string): boolean {
 }
 
 // Generate unique short code
-function generateUniqueCode(length = 6): string {
+async function generateUniqueCode(length = 6): Promise<string> {
   for (let i = 0; i < 10; i++) {
     const code = nanoid(length);
-    if (isCodeAvailable(code) && !RESERVED_WORDS.has(code.toLowerCase())) {
+    if ((await isCodeAvailable(code)) && !RESERVED_WORDS.has(code.toLowerCase())) {
       return code;
     }
   }
   return nanoid(8);
+}
+
+function getBaseUrl(req: Request): string {
+  if (process.env.BASE_URL) {
+    return process.env.BASE_URL.replace(/\/+$/, '');
+  }
+  const forwardedProto = req.headers['x-forwarded-proto'];
+  const protocol = Array.isArray(forwardedProto)
+    ? forwardedProto[0]
+    : forwardedProto || (process.env.VERCEL ? 'https' : req.protocol || 'http');
+  const host = req.headers['x-forwarded-host'] || req.get('host') || 'localhost:3000';
+  return `${protocol}://${host}`;
 }
 
 // POST /api/links - Create a new smart redirect link
@@ -62,12 +74,13 @@ linksRouter.post('/', async (req: Request, res: Response) => {
           error: 'Custom slug must be 3-32 characters long and contain only letters, numbers, hyphens, and underscores.',
         });
       }
-      if (!isCodeAvailable(slug)) {
+      const available = await isCodeAvailable(slug);
+      if (!available) {
         return res.status(409).json({ error: `Custom slug "${slug}" is already taken. Please choose another.` });
       }
       code = slug;
     } else {
-      code = generateUniqueCode(6);
+      code = await generateUniqueCode(6);
     }
 
     // Parse URL structure
@@ -77,7 +90,7 @@ linksRouter.post('/', async (req: Request, res: Response) => {
     const metadata = await fetchYouTubeMetadata(trimmedUrl, parsed);
 
     // Save to Database
-    const linkRecord = createLink({
+    const linkRecord = await createLink({
       code,
       originalUrl: trimmedUrl,
       cleanUrl: parsed.cleanUrl,
@@ -90,9 +103,7 @@ linksRouter.post('/', async (req: Request, res: Response) => {
       thumbnailUrl: metadata.thumbnailUrl,
     });
 
-    const host = req.get('host') || 'localhost:3000';
-    const protocol = req.protocol || 'http';
-    const shortUrl = `${protocol}://${host}/${code}`;
+    const shortUrl = `${getBaseUrl(req)}/${code}`;
 
     return res.status(201).json({
       success: true,
@@ -128,9 +139,9 @@ linksRouter.get('/preview', async (req: Request, res: Response) => {
 });
 
 // GET /api/links/recent - Recent links for user showcase
-linksRouter.get('/recent', (_req: Request, res: Response) => {
+linksRouter.get('/recent', async (_req: Request, res: Response) => {
   try {
-    const links = getRecentLinks(12);
+    const links = await getRecentLinks(12);
     return res.json({ success: true, links });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to fetch recent links' });
@@ -138,19 +149,18 @@ linksRouter.get('/recent', (_req: Request, res: Response) => {
 });
 
 // GET /api/links/:code - Single link details
-linksRouter.get('/:code', (req: Request, res: Response) => {
+linksRouter.get('/:code', async (req: Request, res: Response) => {
   try {
     const code = String(req.params.code || '');
-    const link = getLinkByCode(code);
+    const link = await getLinkByCode(code);
     if (!link) {
       return res.status(404).json({ error: 'Link not found' });
     }
-    const host = req.get('host') || 'localhost:3000';
-    const protocol = req.protocol || 'http';
+    const shortUrl = `${getBaseUrl(req)}/${code}`;
     return res.json({
       success: true,
       link,
-      shortUrl: `${protocol}://${host}/${code}`,
+      shortUrl,
     });
   } catch (err) {
     return res.status(500).json({ error: 'Server error' });
@@ -158,10 +168,10 @@ linksRouter.get('/:code', (req: Request, res: Response) => {
 });
 
 // GET /api/links/:code/stats - Detailed analytics
-linksRouter.get('/:code/stats', (req: Request, res: Response) => {
+linksRouter.get('/:code/stats', async (req: Request, res: Response) => {
   try {
     const code = String(req.params.code || '');
-    const stats = getLinkStats(code);
+    const stats = await getLinkStats(code);
     if (!stats) {
       return res.status(404).json({ error: 'Link not found' });
     }

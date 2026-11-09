@@ -9,11 +9,12 @@
     "dev:client": "vite --config client/vite.config.ts",
     "dev": "concurrently -n \"server,client\" -c \"blue,green\" \"npm run dev:server\" \"npm run dev:client\"",
     "build:client": "vite build --config client/vite.config.ts",
-    "build:server": "tsc -p server/tsconfig.json",
+    "build:server": "tsc",
     "build": "npm run build:client && npm run build:server",
-    "start": "node dist-server/index.js"
+    "start": "node dist-server/server/index.js"
   },
   "dependencies": {
+    "@libsql/client": "^0.18.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
@@ -31,6 +32,7 @@
     "@types/react-dom": "^19.0.3",
     "@types/sql.js": "^1.4.9",
     "@types/ua-parser-js": "^0.7.39",
+    "@vercel/node": "^30.0.0",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
     "clsx": "^2.1.1",

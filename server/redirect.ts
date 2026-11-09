@@ -15,9 +15,9 @@ function hashIp(ip: string | undefined): string {
   return crypto.createHash('sha256').update(ip + 'salt_yt_paster').digest('hex').slice(0, 12);
 }
 
-export function handleSmartRedirect(req: Request, res: Response) {
+export async function handleSmartRedirect(req: Request, res: Response) {
   const code = String(req.params.code || '');
-  const link = getLinkByCode(code);
+  const link = await getLinkByCode(code);
 
   if (!link) {
     return res.status(404).send(`
@@ -71,19 +71,17 @@ export function handleSmartRedirect(req: Request, res: Response) {
 
   // Async record click without slowing down redirect
   if (!isBot) {
-    setTimeout(() => {
-      recordClick({
-        link_id: link.id,
-        code: link.code,
-        device_type: deviceCategory,
-        os_name: osName,
-        browser_name: browserName,
-        is_in_app_browser: isInApp ? 1 : 0,
-        referrer: cleanReferrer(referrer),
-        user_agent: userAgent,
-        ip_hash: hashIp(req.ip),
-      });
-    }, 0);
+    recordClick({
+      link_id: link.id,
+      code: link.code,
+      device_type: deviceCategory,
+      os_name: osName,
+      browser_name: browserName,
+      is_in_app_browser: isInApp ? 1 : 0,
+      referrer: cleanReferrer(referrer),
+      user_agent: userAgent,
+      ip_hash: hashIp(req.ip),
+    }).catch(() => {});
   }
 
   // Parse original YouTube info to get precise deep linking targets
