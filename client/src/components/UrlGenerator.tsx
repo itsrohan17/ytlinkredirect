@@ -60,13 +60,18 @@ export const UrlGenerator: React.FC<UrlGeneratorProps> = ({ onSuccess, initialUr
       try {
         const res = await fetch(`/api/preview?url=${encodeURIComponent(val.trim())}`);
         if (res.ok) {
-          const data = await res.json();
-          setPreviewData({
-            title: data.metadata.title,
-            author: data.metadata.authorName,
-            thumbnail: data.metadata.thumbnailUrl,
-            type: data.parsed.type,
-          });
+          const text = await res.text();
+          if (text && text.trim()) {
+            const data = JSON.parse(text);
+            if (data?.metadata) {
+              setPreviewData({
+                title: data.metadata.title,
+                author: data.metadata.authorName,
+                thumbnail: data.metadata.thumbnailUrl,
+                type: data.parsed.type,
+              });
+            }
+          }
         }
       } catch (e) {
         // Silently fail preview
@@ -133,10 +138,18 @@ export const UrlGenerator: React.FC<UrlGeneratorProps> = ({ onSuccess, initialUr
         }),
       });
 
-      const data = await res.json();
+      let data: any = {};
+      const text = await res.text();
+      if (text && text.trim()) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          throw new Error(text.slice(0, 150) || `Server error (${res.status})`);
+        }
+      }
 
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to generate smart link');
+        throw new Error(data?.error || `Failed to generate smart link (HTTP ${res.status})`);
       }
 
       onSuccess(data);

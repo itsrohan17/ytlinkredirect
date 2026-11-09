@@ -12,19 +12,33 @@ export async function initDb(): Promise<Client> {
   const authToken = process.env.TURSO_AUTH_TOKEN;
 
   if (url) {
-    console.log('📡 Connecting to remote database at:', url.replace(/:\/\/.*@/, '://***@'));
-    client = createClient({ url, authToken });
-  } else {
-    // If running on Vercel without a database configured, use /tmp or memory
-    const isVercel = Boolean(process.env.VERCEL);
-    const dbDir = isVercel ? '/tmp' : path.resolve(process.cwd(), 'data');
-    if (!fs.existsSync(dbDir)) {
-      try {
-        fs.mkdirSync(dbDir, { recursive: true });
-      } catch {}
+    const masked = url.replace(/:\/\/.*@/, '://***@');
+    console.log(`📡 [Database] Connecting to remote Turso database at: ${masked}`);
+    try {
+      client = createClient({ url, authToken });
+      await client.execute('SELECT 1;');
+      console.log('✅ [Database] Remote database connection verified.');
+    } catch (err: any) {
+      console.error('❌ [Database] Connection error with remote database:', err.message);
+      client = null;
+      throw new Error(`Failed to connect to remote database: ${err.message}. Please verify TURSO_DATABASE_URL and TURSO_AUTH_TOKEN.`);
     }
-    const dbPath = path.join(dbDir, 'app.db');
-    client = createClient({ url: `file:${dbPath}` });
+  } else {
+    const isVercel = Boolean(process.env.VERCEL);
+    if (isVercel) {
+      console.warn('⚠️ [Database] TURSO_DATABASE_URL not set in Vercel environment. Using in-memory fallback.');
+      client = createClient({ url: ':memory:' });
+    } else {
+      const dbDir = path.resolve(process.cwd(), 'data');
+      if (!fs.existsSync(dbDir)) {
+        try {
+          fs.mkdirSync(dbDir, { recursive: true });
+        } catch {}
+      }
+      const dbPath = path.join(dbDir, 'app.db');
+      console.log(`📁 [Database] Using local SQLite file at: ${dbPath}`);
+      client = createClient({ url: `file:${dbPath}` });
+    }
   }
 
   // Schema creation

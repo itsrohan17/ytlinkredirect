@@ -33,8 +33,16 @@ export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({
     setError(null);
     try {
       const res = await fetch(`/api/links/${encodeURIComponent(code)}/stats`);
-      if (!res.ok) throw new Error('Failed to load stats');
-      const data = await res.json();
+      const text = await res.text();
+      let data: any = {};
+      if (text && text.trim()) {
+        try {
+          data = JSON.parse(text);
+        } catch {
+          throw new Error(text.slice(0, 150) || `Server error (${res.status})`);
+        }
+      }
+      if (!res.ok) throw new Error(data?.error || `Failed to load stats (${res.status})`);
       setStats(data.stats);
     } catch (err: any) {
       setError(err.message || 'Error fetching analytics');

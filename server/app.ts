@@ -5,7 +5,7 @@ import rateLimit from 'express-rate-limit';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { initDb, getLinkByCode } from './db.js';
+import { getLinkByCode } from './db.js';
 import { linksRouter } from './routes/links.js';
 import { handleSmartRedirect } from './redirect.js';
 
@@ -20,7 +20,7 @@ app.set('trust proxy', 1);
 // Basic security headers, permitting required images and inline scripts for redirect UX
 app.use(
   helmet({
-    contentSecurityPolicy: false, // Disabled to allow external YouTube thumbnails and inline redirect scripts
+    contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false,
   })
 );
@@ -28,6 +28,17 @@ app.use(
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Request logging for production observability
+app.use((req, res, next) => {
+  const start = Date.now();
+  res.on('finish', () => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/health')) {
+      console.log(`[HTTP] ${req.method} ${req.originalUrl} - ${res.statusCode} (${Date.now() - start}ms)`);
+    }
+  });
+  next();
+});
 
 // Rate limiting for link creation (60 requests per 15 minutes per IP)
 const linkCreateLimiter = rateLimit({
@@ -40,11 +51,16 @@ const linkCreateLimiter = rateLimit({
 
 // Health check endpoint
 app.get('/health', (_req, res) => {
-  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+  res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
-// API routes
+app.get('/api/health', (_req, res) => {
+  res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
+});
+
+// Mount linksRouter on both /api/links, /links, and /api
 app.use('/api/links', linkCreateLimiter, linksRouter);
+app.use('/links', linkCreateLimiter, linksRouter);
 app.use('/api', linksRouter);
 
 // Smart Redirect route: /:code
@@ -57,22 +73,24 @@ app.get('/:code', async (req, res, next) => {
     code.startsWith('api') ||
     code.startsWith('assets') ||
     code === 'favicon.ico' ||
-    code === 'robots.txt'
+    code === 'robots.txt' ||
+    code === 'health' ||
+    code === 'preview' ||
+    code === 'recent' ||
+    code === 'links'
   ) {
     return next();
   }
 
   try {
-    // Check if code exists in links DB
     const link = await getLinkByCode(code);
     if (link) {
       return await handleSmartRedirect(req, res);
     }
   } catch (err) {
-    console.error('Error handling smart redirect:', err);
+    console.error(`❌ [Redirect Error] /${code}:`, err);
   }
 
-  // Not a link code, pass to next (frontend router or 404)
   next();
 });
 
@@ -81,11 +99,30 @@ const clientDistPath = path.resolve(process.cwd(), 'dist-client');
 if (fs.existsSync(clientDistPath) && !process.env.VERCEL) {
   app.use(express.static(clientDistPath));
   app.get('*', (req, res, next) => {
-    if (req.path.startsWith('/api')) {
+    if (req.path.startsWith('/api') || req.path.startsWith('/links')) {
       return next();
     }
     res.sendFile(path.join(clientDistPath, 'index.html'));
   });
 }
+
+// Global 404 handler for API routes - ALWAYS returns JSON
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api') || req.path.startsWith('/links')) {
+    return res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.originalUrl}` });
+  }
+  next();
+});
+
+// Global Error Handler - ALWAYS returns JSON
+app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error(`❌ [Express Unhandled Error] ${req.method} ${req.originalUrl}:`, err);
+  const status = typeof err.status === 'number' && err.status >= 400 && err.status < 600 ? err.status : 500;
+  res.setHeader('Content-Type', 'application/json');
+  res.status(status).json({
+    error: err.message || 'Internal server error occurred',
+    code: err.code || 'INTERNAL_ERROR',
+  });
+});
 
 export default app;
