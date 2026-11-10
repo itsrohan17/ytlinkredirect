@@ -1,13 +1,29 @@
-import React, { useState } from 'react';
-import { QrCode, Eye, FileArchive, Wrench } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { QrCode, Eye, FileArchive } from 'lucide-react';
 import { QrCodeStudioTab } from './utilities/QrCodeStudioTab';
 import { SocialPreviewTesterTab } from './utilities/SocialPreviewTesterTab';
 import { FileCompressorTab } from './utilities/FileCompressorTab';
 
-type UtilityTab = 'qr' | 'preview' | 'compressor';
+export type UtilityTab = 'qr' | 'preview' | 'compressor';
 
-export const UtilitiesSection: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<UtilityTab>('qr');
+interface UtilitiesSectionProps {
+  embedded?: boolean;
+  initialTab?: UtilityTab;
+  defaultQrSize?: number;
+  defaultQrEc?: 'L' | 'M' | 'Q' | 'H';
+}
+
+export const UtilitiesSection: React.FC<UtilitiesSectionProps> = ({
+  embedded = false,
+  initialTab,
+  defaultQrSize = 512,
+  defaultQrEc = 'M',
+}) => {
+  const [activeTab, setActiveTab] = useState<UtilityTab>(initialTab || 'qr');
+
+  useEffect(() => {
+    if (initialTab) setActiveTab(initialTab);
+  }, [initialTab]);
 
   const tabs: Array<{ id: UtilityTab; label: string; icon: React.ReactNode; activeClass: string }> = [
     {
@@ -31,21 +47,22 @@ export const UtilitiesSection: React.FC = () => {
   ];
 
   return (
-    <section id="utilities-toolkit" className="py-12 sm:py-20 max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div className="text-center max-w-3xl mx-auto mb-10">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-bold uppercase tracking-wider mb-4">
-          <Wrench className="w-3.5 h-3.5" />
-          <span>LinkTwin Creator Toolkit</span>
+    <section
+      id="utilities-toolkit"
+      className={embedded ? 'lt-adaptive-surface space-y-4' : 'py-12 sm:py-20 max-w-6xl mx-auto px-4 sm:px-6 lg:px-8'}
+    >
+      {!embedded && (
+        <div className="text-center max-w-3xl mx-auto mb-10">
+          <h2 className="text-3xl sm:text-4xl font-extrabold text-zinc-900 dark:text-white tracking-tight">
+            QR Studio, Social Previews &amp; Compression
+          </h2>
+          <p className="mt-4 text-sm sm:text-base text-zinc-600 dark:text-zinc-400">
+            Generate branded scannable QR codes, audit how links appear on WhatsApp, Telegram, and Facebook, and compress images, PDFs, audio, and video cleanly.
+          </p>
         </div>
-        <h2 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
-          QR Studio, Social Previews &amp; Compression
-        </h2>
-        <p className="mt-4 text-sm sm:text-base text-zinc-400">
-          Generate branded scannable QR codes, audit how links appear on WhatsApp, Telegram, and Facebook, and compress images, PDFs, audio, and video cleanly.
-        </p>
-      </div>
+      )}
 
-      <div className="glass-card rounded-2xl border border-zinc-800/90 p-5 sm:p-8 shadow-2xl">
+      <div className="glass-card rounded-2xl p-4 sm:p-6 shadow-sm">
         <div className="grid grid-cols-1 sm:flex sm:flex-wrap items-center gap-2 p-1.5 bg-zinc-900/90 border border-zinc-800 rounded-xl w-full sm:w-fit mb-6">
           {tabs.map((tab) => (
             <button
@@ -63,7 +80,9 @@ export const UtilitiesSection: React.FC = () => {
         </div>
 
         <div>
-          {activeTab === 'qr' && <QrCodeStudioTab />}
+          {activeTab === 'qr' && (
+            <QrCodeStudioTab defaultSize={defaultQrSize} defaultEcLevel={defaultQrEc} />
+          )}
           {activeTab === 'preview' && <SocialPreviewTesterTab />}
           {activeTab === 'compressor' && <FileCompressorTab />}
         </div>

@@ -65,7 +65,15 @@ const QR_TYPE_TABS: { id: QrType; label: string; icon: React.ReactNode }[] = [
   { id: 'whatsapp', label: 'WhatsApp', icon: <MessageCircle className="w-3.5 h-3.5" /> },
 ];
 
-export const QrCodeStudioTab: React.FC = () => {
+interface QrCodeStudioTabProps {
+  defaultSize?: number;
+  defaultEcLevel?: EcLevel;
+}
+
+export const QrCodeStudioTab: React.FC<QrCodeStudioTabProps> = ({
+  defaultSize = 512,
+  defaultEcLevel = 'M',
+}) => {
   const [qrType, setQrType] = useState<QrType>('url');
 
   // Form states
@@ -89,8 +97,8 @@ export const QrCodeStudioTab: React.FC = () => {
   // Styling & EC
   const [fgColor, setFgColor] = useState('#09090b');
   const [bgColor, setBgColor] = useState('#ffffff');
-  const [size, setSize] = useState<number>(512);
-  const [ecLevel, setEcLevel] = useState<EcLevel>('M');
+  const [size, setSize] = useState<number>(defaultSize);
+  const [ecLevel, setEcLevel] = useState<EcLevel>(defaultEcLevel);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [logoScale, setLogoScale] = useState<number>(20); // percentage of QR size
   const [excavateLogo, setExcavateLogo] = useState<boolean>(true);

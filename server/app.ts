@@ -5,7 +5,13 @@ import rateLimit from 'express-rate-limit';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { getLinkByCode } from './db.js';
+import { getDatabaseMode, getLinkByCode } from './db.js';
+import {
+  isObjectStorageConfigured,
+  MAX_BROWSER_MB,
+  MAX_WORKER_MB,
+  SIGNED_URL_TTL_SECONDS,
+} from './services/storage.js';
 import { linksRouter } from './routes/links.js';
 import { mediaRouter } from './routes/media.js';
 import { jobsRouter } from './routes/jobs.js';
@@ -43,22 +49,43 @@ app.use((req, res, next) => {
   next();
 });
 
-// Rate limiting for link creation (60 requests per 15 minutes per IP)
+// Rate limiting for write mutations (60 write requests per 15 minutes per IP)
 const linkCreateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 60,
+  skip: (req) => req.method === 'GET',
   message: { error: 'Too many requests created from this IP. Please try again after 15 minutes.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
+function buildHealthPayload() {
+  const objectStorageConfigured = isObjectStorageConfigured();
+  return {
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    environment: process.env.VERCEL ? 'vercel' : 'node',
+    capabilities: {
+      databaseMode: getDatabaseMode(),
+      objectStorageConfigured,
+      workerQueueSupported: objectStorageConfigured,
+      limits: {
+        browserWasmMaxMb: MAX_BROWSER_MB,
+        workerMaxMb: MAX_WORKER_MB,
+        signedUrlTtlSeconds: SIGNED_URL_TTL_SECONDS,
+        fileTtlHours: Number(process.env.FILE_TTL_HOURS || 24),
+      },
+    },
+  };
+}
+
 // Health check endpoint
 app.get('/health', (_req, res) => {
-  res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
+  res.status(200).json(buildHealthPayload());
 });
 
 app.get('/api/health', (_req, res) => {
-  res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
+  res.status(200).json(buildHealthPayload());
 });
 
 // Mount utilitiesRouter on /api/utilities and /utilities
@@ -91,6 +118,7 @@ app.get('/:code', async (req, res, next) => {
     code === 'robots.txt' ||
     code === 'health' ||
     code === 'preview' ||
+    code === 'analytics' ||
     code === 'recent' ||
     code === 'links' ||
     code === 'media' ||

@@ -53,6 +53,7 @@ export interface LinkRecord {
   thumbnail_url: string;
   created_at: string;
   click_count: number;
+  canManage?: boolean;
 }
 
 export interface ClickRecord {
@@ -157,4 +158,63 @@ export interface StorageUsageSummary {
   totalOutputBytes: number;
   activeStorageBytes: number;
   objectStorageConfigured: boolean;
+}
+
+export interface PaginatedLinksResult {
+  links: LinkRecord[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+export interface GlobalAnalyticsDashboard {
+  range: '7d' | '30d' | '90d' | 'all';
+  platform: 'all' | Platform;
+  totalClicksInRange: number;
+  inAppClicksInRange: number;
+  byPlatform: {
+    youtube: number;
+    instagram: number;
+    facebook: number;
+  };
+  devices: {
+    android: number;
+    ios: number;
+    desktop: number;
+    other: number;
+  };
+  timeline: Array<{
+    date: string;
+    clicks: number;
+  }>;
+  geo: {
+    hasReliableGeoData: boolean;
+    knownGeoClicks: number;
+    unknownGeoClicks: number;
+    countries: Array<{ country: string; clicks: number }>;
+  };
+  topBrowsers: Array<{ name: string; clicks: number }>;
+  topReferrers: Array<{ name: string; clicks: number }>;
+  topLinks: LinkRecord[];
+  recentClicks: Array<{
+    link_code: string;
+    link_title: string;
+    platform: string;
+    device_type: string;
+    os_name: string;
+    browser_name: string;
+    is_in_app_browser: number;
+    referrer: string;
+    country: string;
+    created_at: string;
+  }>;
+  activityPagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
 }

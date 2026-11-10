@@ -4,11 +4,13 @@ import path from 'path';
 import {
   ClickRecord,
   ContentType,
+  GlobalAnalyticsDashboard,
   LinkRecord,
   LinkStats,
   MediaJobRecord,
   MediaJobStatus,
   MediaModule,
+  PaginatedLinksResult,
   Platform,
   PlatformAnalyticsSummary,
   ProcessingMode,
@@ -16,6 +18,11 @@ import {
 } from './types.js';
 
 let client: Client | null = null;
+let databaseMode: 'turso' | 'local-sqlite' | 'memory' = 'local-sqlite';
+
+export function getDatabaseMode(): 'turso' | 'local-sqlite' | 'memory' {
+  return databaseMode;
+}
 
 async function ensureColumn(
   db: Client,
@@ -44,8 +51,10 @@ export async function initDb(customDbPath?: string): Promise<Client> {
   let activeClient: Client;
 
   if (url === ':memory:') {
+    databaseMode = 'memory';
     activeClient = createClient({ url: ':memory:' });
   } else if (url && !url.startsWith('file:')) {
+    databaseMode = 'turso';
     const masked = url.replace(/:\/\/.*@/, '://***@');
     console.log(`📡 [Database] Connecting to remote Turso database at: ${masked}`);
     try {
@@ -59,13 +68,16 @@ export async function initDb(customDbPath?: string): Promise<Client> {
       );
     }
   } else if (url && url.startsWith('file:')) {
+    databaseMode = 'local-sqlite';
     activeClient = createClient({ url });
   } else {
     const isVercel = Boolean(process.env.VERCEL);
     if (isVercel) {
+      databaseMode = 'memory';
       console.warn('⚠️ [Database] TURSO_DATABASE_URL not set in Vercel environment. Using in-memory fallback.');
       activeClient = createClient({ url: ':memory:' });
     } else {
+      databaseMode = 'local-sqlite';
       const dbDir = path.resolve(process.cwd(), 'data');
       if (!fs.existsSync(dbDir)) {
         try {
@@ -123,6 +135,7 @@ export async function initDb(customDbPath?: string): Promise<Client> {
   // Non-destructive, idempotent migrations for multi-platform & advanced analytics
   await ensureColumn(activeClient, 'links', 'platform', "TEXT DEFAULT 'youtube'");
   await ensureColumn(activeClient, 'links', 'content_id', 'TEXT');
+  await ensureColumn(activeClient, 'links', 'owner_token_hash', 'TEXT');
   await ensureColumn(activeClient, 'clicks', 'platform', "TEXT DEFAULT 'youtube'");
   await ensureColumn(activeClient, 'clicks', 'country', "TEXT DEFAULT 'Unknown'");
 
@@ -178,8 +191,9 @@ async function getDb(): Promise<Client> {
   return client;
 }
 
-function mapLinkRow(row: any): LinkRecord {
+function mapLinkRow(row: any, callerOwnerHash?: string | null): LinkRecord {
   const cleanUrl = String(row.clean_youtube_url || '');
+  const rowOwnerHash = row.owner_token_hash ? String(row.owner_token_hash) : null;
   return {
     id: Number(row.id),
     code: String(row.code),
@@ -205,6 +219,9 @@ function mapLinkRow(row: any): LinkRecord {
     thumbnail_url: String(row.thumbnail_url),
     created_at: String(row.created_at),
     click_count: Number(row.click_count || 0),
+    ...(callerOwnerHash !== undefined
+      ? { canManage: Boolean(rowOwnerHash && callerOwnerHash && rowOwnerHash === callerOwnerHash) }
+      : {}),
   };
 }
 
@@ -231,6 +248,7 @@ export async function createLink(
     title: string;
     authorName: string;
     thumbnailUrl: string;
+    ownerTokenHash?: string | null;
   },
   dbOverride?: Client
 ): Promise<LinkRecord> {
@@ -240,8 +258,8 @@ export async function createLink(
     sql: `INSERT INTO links (
       code, platform, original_url, clean_youtube_url, url_type,
       content_id, video_id, playlist_id, channel_id,
-      title, author_name, thumbnail_url, created_at, click_count
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), 0)`,
+      title, author_name, thumbnail_url, owner_token_hash, created_at, click_count
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), 0)`,
     args: [
       data.code,
       data.platform,
@@ -255,6 +273,7 @@ export async function createLink(
       data.title,
       data.authorName,
       data.thumbnailUrl,
+      data.ownerTokenHash ?? null,
     ],
   });
 
@@ -263,7 +282,11 @@ export async function createLink(
   return link;
 }
 
-export async function getLinkByCode(code: string, dbOverride?: Client): Promise<LinkRecord | null> {
+export async function getLinkByCode(
+  code: string,
+  dbOverride?: Client,
+  callerOwnerHash?: string | null
+): Promise<LinkRecord | null> {
   const db = dbOverride || (await getDb());
   const res = await db.execute({
     sql: 'SELECT * FROM links WHERE code = ? LIMIT 1',
@@ -271,7 +294,24 @@ export async function getLinkByCode(code: string, dbOverride?: Client): Promise<
   });
 
   if (res.rows.length === 0) return null;
-  return mapLinkRow(res.rows[0]);
+  return mapLinkRow(res.rows[0], callerOwnerHash);
+}
+
+export async function getLinkOwnerHashByCode(
+  code: string,
+  dbOverride?: Client
+): Promise<{ id: number; ownerTokenHash: string | null } | null> {
+  const db = dbOverride || (await getDb());
+  const res = await db.execute({
+    sql: 'SELECT id, owner_token_hash FROM links WHERE code = ? LIMIT 1',
+    args: [code],
+  });
+  if (res.rows.length === 0) return null;
+  const r = res.rows[0] as any;
+  return {
+    id: Number(r.id),
+    ownerTokenHash: r.owner_token_hash ? String(r.owner_token_hash) : null,
+  };
 }
 
 export async function recordClick(click: ClickRecord, dbOverride?: Client): Promise<void> {
@@ -462,14 +502,352 @@ export async function getPlatformAnalyticsSummary(dbOverride?: Client): Promise<
   };
 }
 
-export async function getRecentLinks(limit = 10, dbOverride?: Client): Promise<LinkRecord[]> {
+export async function getRecentLinks(
+  limit = 10,
+  dbOverride?: Client,
+  callerOwnerHash?: string | null
+): Promise<LinkRecord[]> {
   const db = dbOverride || (await getDb());
   const res = await db.execute({
     sql: 'SELECT * FROM links ORDER BY id DESC LIMIT ?',
     args: [limit],
   });
 
-  return res.rows.map(mapLinkRow);
+  return res.rows.map((r) => mapLinkRow(r, callerOwnerHash));
+}
+
+export async function listLinksPaginated(
+  options: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    platform?: string;
+    sort?: string;
+    callerOwnerHash?: string | null;
+  } = {},
+  dbOverride?: Client
+): Promise<PaginatedLinksResult> {
+  const db = dbOverride || (await getDb());
+  const page = Math.max(1, Number(options.page || 1));
+  const limit = Math.min(50, Math.max(1, Number(options.limit || 12)));
+  const offset = (page - 1) * limit;
+
+  const conditions: string[] = [];
+  const args: Array<string | number> = [];
+
+  const plat = (options.platform || 'all').toLowerCase();
+  if (plat === 'youtube' || plat === 'instagram' || plat === 'facebook') {
+    conditions.push("LOWER(COALESCE(platform, 'youtube')) = ?");
+    args.push(plat);
+  }
+
+  const q = (options.search || '').trim().toLowerCase();
+  if (q) {
+    const pattern = `%${q}%`;
+    conditions.push(
+      '(LOWER(code) LIKE ? OR LOWER(title) LIKE ? OR LOWER(author_name) LIKE ? OR LOWER(original_url) LIKE ?)'
+    );
+    args.push(pattern, pattern, pattern, pattern);
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  let orderClause = 'ORDER BY id DESC';
+  if (options.sort === 'oldest') orderClause = 'ORDER BY id ASC';
+  else if (options.sort === 'most_clicks') orderClause = 'ORDER BY click_count DESC, id DESC';
+
+  const countRes = await db.execute({
+    sql: `SELECT COUNT(*) as total FROM links ${whereClause}`,
+    args,
+  });
+  const total = Number(countRes.rows[0]?.total || 0);
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+
+  const rowsRes = await db.execute({
+    sql: `SELECT * FROM links ${whereClause} ${orderClause} LIMIT ? OFFSET ?`,
+    args: [...args, limit, offset],
+  });
+
+  return {
+    links: rowsRes.rows.map((r) => mapLinkRow(r, options.callerOwnerHash)),
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages,
+    },
+  };
+}
+
+export async function updateLinkByCode(
+  code: string,
+  updates: {
+    title?: string;
+    originalUrl?: string;
+    cleanUrl?: string;
+    platform?: Platform;
+    urlType?: ContentType;
+    contentId?: string | null;
+    videoId?: string | null;
+    playlistId?: string | null;
+    channelId?: string | null;
+    authorName?: string;
+    thumbnailUrl?: string;
+  },
+  dbOverride?: Client,
+  callerOwnerHash?: string | null
+): Promise<LinkRecord | null> {
+  const db = dbOverride || (await getDb());
+  const existing = await getLinkByCode(code, db, callerOwnerHash);
+  if (!existing) return null;
+
+  await db.execute({
+    sql: `UPDATE links SET
+      title = ?,
+      original_url = ?,
+      clean_youtube_url = ?,
+      platform = ?,
+      url_type = ?,
+      content_id = ?,
+      video_id = ?,
+      playlist_id = ?,
+      channel_id = ?,
+      author_name = ?,
+      thumbnail_url = ?
+    WHERE code = ?`,
+    args: [
+      updates.title ?? existing.title,
+      updates.originalUrl ?? existing.original_url,
+      updates.cleanUrl ?? existing.clean_url,
+      updates.platform ?? existing.platform,
+      updates.urlType ?? existing.url_type,
+      updates.contentId !== undefined ? updates.contentId : existing.content_id,
+      updates.videoId !== undefined ? updates.videoId : existing.video_id,
+      updates.playlistId !== undefined ? updates.playlistId : existing.playlist_id,
+      updates.channelId !== undefined ? updates.channelId : existing.channel_id,
+      updates.authorName ?? existing.author_name,
+      updates.thumbnailUrl ?? existing.thumbnail_url,
+      code,
+    ],
+  });
+
+  return await getLinkByCode(code, db, callerOwnerHash);
+}
+
+export async function deleteLinkByCode(code: string, dbOverride?: Client): Promise<boolean> {
+  const db = dbOverride || (await getDb());
+  const linkRes = await db.execute({
+    sql: 'SELECT id FROM links WHERE code = ? LIMIT 1',
+    args: [code],
+  });
+  if (linkRes.rows.length === 0) return false;
+  const linkId = Number(linkRes.rows[0].id);
+
+  await db.execute({
+    sql: 'DELETE FROM clicks WHERE link_id = ?',
+    args: [linkId],
+  });
+  const delRes = await db.execute({
+    sql: 'DELETE FROM links WHERE id = ?',
+    args: [linkId],
+  });
+  return (delRes.rowsAffected || 0) > 0;
+}
+
+export async function getGlobalAnalyticsDashboard(
+  options: {
+    range?: string;
+    platform?: string;
+    activityPage?: number;
+    activityLimit?: number;
+  } = {},
+  dbOverride?: Client
+): Promise<GlobalAnalyticsDashboard> {
+  const db = dbOverride || (await getDb());
+
+  const range: '7d' | '30d' | '90d' | 'all' =
+    options.range === '7d' || options.range === '90d' || options.range === 'all'
+      ? options.range
+      : '30d';
+
+  const rawPlat = (options.platform || 'all').toLowerCase();
+  const platformFilter: 'all' | Platform =
+    rawPlat === 'youtube' || rawPlat === 'instagram' || rawPlat === 'facebook' ? rawPlat : 'all';
+
+  const conditions: string[] = [];
+  const args: Array<string | number> = [];
+
+  if (range === '7d') conditions.push("c.created_at >= datetime('now', '-7 days')");
+  else if (range === '30d') conditions.push("c.created_at >= datetime('now', '-30 days')");
+  else if (range === '90d') conditions.push("c.created_at >= datetime('now', '-90 days')");
+
+  if (platformFilter !== 'all') {
+    conditions.push("LOWER(COALESCE(c.platform, 'youtube')) = ?");
+    args.push(platformFilter);
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const totRes = await db.execute({
+    sql: `SELECT
+      COUNT(*) as total_clicks,
+      SUM(CASE WHEN c.is_in_app_browser = 1 THEN 1 ELSE 0 END) as in_app_clicks
+    FROM clicks c ${whereClause}`,
+    args,
+  });
+  const totalClicksInRange = Number(totRes.rows[0]?.total_clicks || 0);
+  const inAppClicksInRange = Number(totRes.rows[0]?.in_app_clicks || 0);
+
+  // Platform breakdown within range
+  const platRes = await db.execute({
+    sql: `SELECT LOWER(COALESCE(c.platform, 'youtube')) as plat, COUNT(*) as count FROM clicks c ${whereClause} GROUP BY plat`,
+    args,
+  });
+  const byPlatform = { youtube: 0, instagram: 0, facebook: 0 };
+  for (const r of platRes.rows) {
+    const p = String(r.plat);
+    const cnt = Number(r.count || 0);
+    if (p === 'youtube' || p === 'instagram' || p === 'facebook') byPlatform[p] = cnt;
+  }
+
+  // Devices within range
+  const devRes = await db.execute({
+    sql: `SELECT LOWER(COALESCE(c.device_type, 'other')) as dev, COUNT(*) as count FROM clicks c ${whereClause} GROUP BY dev`,
+    args,
+  });
+  const devices = { android: 0, ios: 0, desktop: 0, other: 0 };
+  for (const r of devRes.rows) {
+    const dev = String(r.dev);
+    const cnt = Number(r.count || 0);
+    if (dev === 'android') devices.android = cnt;
+    else if (dev === 'ios') devices.ios = cnt;
+    else if (dev === 'desktop') devices.desktop = cnt;
+    else devices.other += cnt;
+  }
+
+  // Daily click trend
+  const timeRes = await db.execute({
+    sql: `SELECT date(c.created_at) as day, COUNT(*) as clicks FROM clicks c ${whereClause} GROUP BY date(c.created_at) ORDER BY day ASC LIMIT 90`,
+    args,
+  });
+  const timeline = timeRes.rows
+    .filter((r) => r.day)
+    .map((r) => ({
+      date: String(r.day),
+      clicks: Number(r.clicks || 0),
+    }));
+
+  // Geographic breakdown (never fabricate unknown locations)
+  const geoRes = await db.execute({
+    sql: `SELECT COALESCE(NULLIF(TRIM(c.country), ''), 'Unknown') as country, COUNT(*) as count FROM clicks c ${whereClause} GROUP BY country ORDER BY count DESC LIMIT 12`,
+    args,
+  });
+  let knownGeoClicks = 0;
+  let unknownGeoClicks = 0;
+  const countries: Array<{ country: string; clicks: number }> = [];
+  for (const r of geoRes.rows) {
+    const name = String(r.country || 'Unknown');
+    const count = Number(r.count || 0);
+    if (name.toLowerCase() === 'unknown') {
+      unknownGeoClicks += count;
+    } else {
+      knownGeoClicks += count;
+      countries.push({ country: name, clicks: count });
+    }
+  }
+
+  const browserRes = await db.execute({
+    sql: `SELECT COALESCE(NULLIF(TRIM(c.browser_name), ''), 'Unknown') as name, COUNT(*) as count FROM clicks c ${whereClause} GROUP BY name ORDER BY count DESC LIMIT 8`,
+    args,
+  });
+  const topBrowsers = browserRes.rows.map((r) => ({
+    name: String(r.name || 'Unknown'),
+    clicks: Number(r.count || 0),
+  }));
+
+  const refRes = await db.execute({
+    sql: `SELECT COALESCE(NULLIF(TRIM(c.referrer), ''), 'Direct') as name, COUNT(*) as count FROM clicks c ${whereClause} GROUP BY name ORDER BY count DESC LIMIT 8`,
+    args,
+  });
+  const topReferrers = refRes.rows.map((r) => ({
+    name: String(r.name || 'Direct'),
+    clicks: Number(r.count || 0),
+  }));
+
+  // Top links matching platform filter
+  const topLinkWhere =
+    platformFilter !== 'all' ? "WHERE LOWER(COALESCE(platform, 'youtube')) = ?" : '';
+  const topLinkArgs = platformFilter !== 'all' ? [platformFilter] : [];
+  const topLinksRes = await db.execute({
+    sql: `SELECT * FROM links ${topLinkWhere} ORDER BY click_count DESC, id DESC LIMIT 5`,
+    args: topLinkArgs,
+  });
+  const topLinks = topLinksRes.rows.map((r) => mapLinkRow(r));
+
+  // Paginated recent click activity
+  const activityPage = Math.max(1, Number(options.activityPage || 1));
+  const activityLimit = Math.min(30, Math.max(1, Number(options.activityLimit || 12)));
+  const activityOffset = (activityPage - 1) * activityLimit;
+
+  const recentRes = await db.execute({
+    sql: `SELECT
+      c.code as link_code,
+      COALESCE(l.title, c.code) as link_title,
+      COALESCE(c.platform, 'youtube') as platform,
+      c.device_type,
+      COALESCE(c.os_name, 'Unknown') as os_name,
+      COALESCE(c.browser_name, 'Unknown') as browser_name,
+      COALESCE(c.is_in_app_browser, 0) as is_in_app_browser,
+      COALESCE(c.referrer, 'Direct') as referrer,
+      COALESCE(c.country, 'Unknown') as country,
+      c.created_at
+    FROM clicks c
+    LEFT JOIN links l ON l.id = c.link_id
+    ${whereClause}
+    ORDER BY c.id DESC
+    LIMIT ? OFFSET ?`,
+    args: [...args, activityLimit, activityOffset],
+  });
+
+  const recentClicks = recentRes.rows.map((r: any) => ({
+    link_code: String(r.link_code || ''),
+    link_title: String(r.link_title || ''),
+    platform: String(r.platform || 'youtube'),
+    device_type: String(r.device_type || 'other'),
+    os_name: String(r.os_name || 'Unknown'),
+    browser_name: String(r.browser_name || 'Unknown'),
+    is_in_app_browser: Number(r.is_in_app_browser || 0),
+    referrer: String(r.referrer || 'Direct'),
+    country: String(r.country || 'Unknown'),
+    created_at: String(r.created_at || ''),
+  }));
+
+  const activityTotalPages = Math.max(1, Math.ceil(totalClicksInRange / activityLimit));
+
+  return {
+    range,
+    platform: platformFilter,
+    totalClicksInRange,
+    inAppClicksInRange,
+    byPlatform,
+    devices,
+    timeline,
+    geo: {
+      hasReliableGeoData: knownGeoClicks > 0,
+      knownGeoClicks,
+      unknownGeoClicks,
+      countries,
+    },
+    topBrowsers,
+    topReferrers,
+    topLinks,
+    recentClicks,
+    activityPagination: {
+      page: activityPage,
+      limit: activityLimit,
+      total: totalClicksInRange,
+      totalPages: activityTotalPages,
+    },
+  };
 }
 
 function mapMediaJobRow(row: any): MediaJobRecord {

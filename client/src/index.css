@@ -7,37 +7,81 @@
     font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
     background-color: #09090b;
     color: #f4f4f5;
+    transition: background-color 0.2s ease, color 0.2s ease;
   }
-  
+
+  html.light body {
+    background-color: #f4f4f6;
+    color: #18181b;
+  }
+
   code, pre {
     font-family: 'JetBrains Mono', monospace;
   }
 }
 
-/* Custom glow and backdrop effects */
-.radial-glow {
-  background: radial-gradient(circle 600px at 50% -100px, rgba(229, 9, 20, 0.18), transparent 70%);
-}
-
-.radial-glow-card {
-  background: radial-gradient(circle at 50% 0%, rgba(255, 0, 0, 0.08), transparent 60%);
-}
-
 .glass-card {
-  background: rgba(18, 18, 22, 0.7);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(18, 18, 22, 0.86);
+  border: 1px solid rgba(63, 63, 70, 0.7);
 }
 
-.glass-card-hover {
-  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+html.light .glass-card {
+  background: #ffffff;
+  border: 1px solid #e4e4e7;
 }
 
-.glass-card-hover:hover {
-  border-color: rgba(239, 68, 68, 0.35);
-  box-shadow: 0 10px 30px -10px rgba(229, 9, 20, 0.15);
-  transform: translateY(-2px);
+/* Light-mode surface adaptation for embedded Phase 3/4 studios and legacy modals */
+html.light .lt-adaptive-surface {
+  color: #18181b;
+}
+
+html.light .lt-adaptive-surface .bg-zinc-900,
+html.light .lt-adaptive-surface .bg-zinc-900\/90,
+html.light .lt-adaptive-surface .bg-zinc-900\/80,
+html.light .lt-adaptive-surface .bg-zinc-900\/70,
+html.light .lt-adaptive-surface .bg-zinc-900\/60,
+html.light .lt-adaptive-surface .bg-zinc-900\/50,
+html.light .lt-adaptive-surface .bg-zinc-900\/40,
+html.light .lt-adaptive-surface .bg-surface-100,
+html.light .lt-adaptive-surface .bg-surface-200 {
+  background-color: #ffffff;
+}
+
+html.light .lt-adaptive-surface .bg-zinc-950,
+html.light .lt-adaptive-surface .bg-zinc-950\/70,
+html.light .lt-adaptive-surface .bg-zinc-950\/60,
+html.light .lt-adaptive-surface .bg-zinc-950\/50,
+html.light .lt-adaptive-surface .bg-surface-300 {
+  background-color: #f4f4f5;
+}
+
+html.light .lt-adaptive-surface .bg-zinc-800,
+html.light .lt-adaptive-surface .bg-zinc-800\/80 {
+  background-color: #f4f4f5;
+}
+
+html.light .lt-adaptive-surface .border-zinc-800,
+html.light .lt-adaptive-surface .border-zinc-800\/90,
+html.light .lt-adaptive-surface .border-zinc-800\/80,
+html.light .lt-adaptive-surface .border-zinc-700 {
+  border-color: #e4e4e7;
+}
+
+html.light .lt-adaptive-surface .text-zinc-100,
+html.light .lt-adaptive-surface .text-zinc-200,
+html.light .lt-adaptive-surface .text-zinc-300 {
+  color: #18181b;
+}
+
+html.light .lt-adaptive-surface .text-zinc-400,
+html.light .lt-adaptive-surface .text-zinc-500 {
+  color: #52525b;
+}
+
+html.light .lt-adaptive-surface input,
+html.light .lt-adaptive-surface select,
+html.light .lt-adaptive-surface textarea {
+  color: #18181b;
 }
 
 /* Custom scrollbar */
@@ -50,9 +94,17 @@
   background: #09090b;
 }
 
+html.light ::-webkit-scrollbar-track {
+  background: #f4f4f6;
+}
+
 ::-webkit-scrollbar-thumb {
   background: #27272a;
   border-radius: 4px;
+}
+
+html.light ::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
 }
 
 ::-webkit-scrollbar-thumb:hover {

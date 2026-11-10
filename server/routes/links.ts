@@ -1,16 +1,42 @@
 import { Router, Request, Response } from 'express';
+import crypto from 'crypto';
 import { nanoid } from 'nanoid';
 import {
   createLink,
+  deleteLinkByCode,
+  getGlobalAnalyticsDashboard,
   getLinkByCode,
+  getLinkOwnerHashByCode,
   getLinkStats,
   getPlatformAnalyticsSummary,
   getRecentLinks,
   isCodeAvailable,
+  listLinksPaginated,
+  updateLinkByCode,
 } from '../db.js';
 import { detectPlatform, fetchPlatformMetadata, parsePlatformUrl } from '../platforms/index.js';
 
 export const linksRouter = Router();
+
+function extractSessionToken(req: Request): string {
+  const cookieHeader = String(req.headers.cookie || '');
+  for (const part of cookieHeader.split(';')) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith('lt_session=')) {
+      return trimmed.slice('lt_session='.length).trim();
+    }
+  }
+  return '';
+}
+
+function hashSessionToken(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function getCallerSessionHash(req: Request): string | null {
+  const tok = extractSessionToken(req);
+  return tok ? hashSessionToken(tok) : null;
+}
 
 const RESERVED_WORDS = new Set([
   'api',
@@ -26,8 +52,11 @@ const RESERVED_WORDS = new Set([
   'stats',
   'summary',
   'recent',
+  'analytics',
   'links',
   'media',
+  'jobs',
+  'utilities',
 ]);
 
 function isValidCustomSlug(slug: string): boolean {
@@ -99,6 +128,14 @@ linksRouter.post('/', async (req: Request, res: Response) => {
     const parsed = parsePlatformUrl(trimmedUrl);
     const metadata = await fetchPlatformMetadata(parsed);
 
+    let sessionToken = extractSessionToken(req);
+    if (!sessionToken) {
+      sessionToken = crypto.randomBytes(24).toString('hex');
+      const cookieFlags = `HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${process.env.VERCEL ? '; Secure' : ''}`;
+      res.setHeader('Set-Cookie', `lt_session=${sessionToken}; ${cookieFlags}`);
+    }
+    const ownerTokenHash = hashSessionToken(sessionToken);
+
     const linkRecord = await createLink({
       code,
       platform: parsed.platform,
@@ -112,6 +149,7 @@ linksRouter.post('/', async (req: Request, res: Response) => {
       title: metadata.title,
       authorName: metadata.authorName,
       thumbnailUrl: metadata.thumbnailUrl,
+      ownerTokenHash,
     });
 
     const shortUrl = `${getBaseUrl(req)}/${code}`;
@@ -119,7 +157,7 @@ linksRouter.post('/', async (req: Request, res: Response) => {
     return res.status(201).json({
       success: true,
       platform: parsed.platform,
-      link: linkRecord,
+      link: { ...linkRecord, canManage: true },
       shortUrl,
       parsed,
     });
@@ -154,6 +192,41 @@ linksRouter.get('/preview', async (req: Request, res: Response) => {
   }
 });
 
+// GET /api/links - Paginated Smart Links listing with search & platform filter
+linksRouter.get('/', async (req: Request, res: Response) => {
+  try {
+    const callerHash = getCallerSessionHash(req);
+    const result = await listLinksPaginated({
+      page: Number(req.query.page || 1),
+      limit: Number(req.query.limit || 12),
+      search: String(req.query.q || ''),
+      platform: String(req.query.platform || 'all'),
+      sort: String(req.query.sort || 'newest'),
+      callerOwnerHash: callerHash,
+    });
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('❌ [List Links Error]:', err);
+    return res.status(500).json({ error: 'Failed to load links.' });
+  }
+});
+
+// GET /api/links/analytics - Aggregated analytics dashboard (SQL-aggregated + paginated activity)
+linksRouter.get('/analytics', async (req: Request, res: Response) => {
+  try {
+    const analytics = await getGlobalAnalyticsDashboard({
+      range: String(req.query.range || '30d'),
+      platform: String(req.query.platform || 'all'),
+      activityPage: Number(req.query.activityPage || 1),
+      activityLimit: Number(req.query.activityLimit || 12),
+    });
+    return res.json({ success: true, analytics });
+  } catch (err) {
+    console.error('❌ [Global Analytics Error]:', err);
+    return res.status(500).json({ error: 'Failed to load analytics.' });
+  }
+});
+
 // GET /api/links/summary - Global multi-platform analytics summary
 linksRouter.get('/summary', async (_req: Request, res: Response) => {
   try {
@@ -165,9 +238,10 @@ linksRouter.get('/summary', async (_req: Request, res: Response) => {
 });
 
 // GET /api/links/recent - Recent links for user showcase
-linksRouter.get('/recent', async (_req: Request, res: Response) => {
+linksRouter.get('/recent', async (req: Request, res: Response) => {
   try {
-    const links = await getRecentLinks(12);
+    const callerHash = getCallerSessionHash(req);
+    const links = await getRecentLinks(12, undefined, callerHash);
     return res.json({ success: true, links });
   } catch (err) {
     return res.status(500).json({ error: 'Failed to fetch recent links' });
@@ -178,7 +252,8 @@ linksRouter.get('/recent', async (_req: Request, res: Response) => {
 linksRouter.get('/:code', async (req: Request, res: Response) => {
   try {
     const code = String(req.params.code || '');
-    const link = await getLinkByCode(code);
+    const callerHash = getCallerSessionHash(req);
+    const link = await getLinkByCode(code, undefined, callerHash);
     if (!link) {
       return res.status(404).json({ error: 'Link not found' });
     }
@@ -190,6 +265,89 @@ linksRouter.get('/:code', async (req: Request, res: Response) => {
     });
   } catch (err) {
     return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PATCH /api/links/:code - Edit title or destination URL (session-owner authorized, preserves short code)
+linksRouter.patch('/:code', async (req: Request, res: Response) => {
+  try {
+    const code = String(req.params.code || '');
+    const callerHash = getCallerSessionHash(req);
+    const ownerInfo = await getLinkOwnerHashByCode(code);
+    if (!ownerInfo) {
+      return res.status(404).json({ error: 'Link not found.' });
+    }
+    if (!ownerInfo.ownerTokenHash || !callerHash || ownerInfo.ownerTokenHash !== callerHash) {
+      return res.status(403).json({
+        error: 'Unauthorized: only links created in your current workspace session can be edited.',
+      });
+    }
+
+    const { title, originalUrl } = req.body || {};
+    const updates: Parameters<typeof updateLinkByCode>[1] = {};
+
+    if (typeof title === 'string') {
+      const cleanTitle = title.trim().slice(0, 200);
+      if (!cleanTitle) {
+        return res.status(400).json({ error: 'Link title cannot be empty.' });
+      }
+      updates.title = cleanTitle;
+    }
+
+    if (typeof originalUrl === 'string' && originalUrl.trim()) {
+      const trimmed = originalUrl.trim();
+      const platform = detectPlatform(trimmed);
+      if (!platform) {
+        return res.status(400).json({
+          error: 'Destination URL must be a valid YouTube, Instagram, or Facebook URL.',
+        });
+      }
+      const parsed = parsePlatformUrl(trimmed);
+      updates.originalUrl = trimmed;
+      updates.cleanUrl = parsed.cleanUrl;
+      updates.platform = parsed.platform;
+      updates.urlType = parsed.type;
+      updates.contentId = parsed.contentId ?? null;
+      updates.videoId = parsed.videoId ?? null;
+      updates.playlistId = parsed.playlistId ?? null;
+      updates.channelId = parsed.channelPath ?? null;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'Provide a valid title or destination URL to update.' });
+    }
+
+    const updated = await updateLinkByCode(code, updates, undefined, callerHash);
+    return res.json({ success: true, link: updated });
+  } catch (err) {
+    console.error('❌ [Update Link Error]:', err);
+    return res.status(500).json({ error: 'Failed to update link.' });
+  }
+});
+
+// DELETE /api/links/:code - Delete link (session-owner authorized)
+linksRouter.delete('/:code', async (req: Request, res: Response) => {
+  try {
+    const code = String(req.params.code || '');
+    const callerHash = getCallerSessionHash(req);
+    const ownerInfo = await getLinkOwnerHashByCode(code);
+    if (!ownerInfo) {
+      return res.status(404).json({ error: 'Link not found.' });
+    }
+    if (!ownerInfo.ownerTokenHash || !callerHash || ownerInfo.ownerTokenHash !== callerHash) {
+      return res.status(403).json({
+        error: 'Unauthorized: only links created in your current workspace session can be deleted.',
+      });
+    }
+
+    const deleted = await deleteLinkByCode(code);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Link not found.' });
+    }
+    return res.json({ success: true, deletedCode: code });
+  } catch (err) {
+    console.error('❌ [Delete Link Error]:', err);
+    return res.status(500).json({ error: 'Failed to delete link.' });
   }
 });
 
