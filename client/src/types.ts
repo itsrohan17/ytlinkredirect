@@ -95,11 +95,22 @@ export interface PlatformAnalyticsSummary {
   topReferrers: Record<string, number>;
 }
 
+export interface VideoStreamOption {
+  id: string;
+  format: 'MP4' | 'WebM';
+  quality: '360p' | '480p' | '720p' | '1080p' | 'Original';
+  fileSizeBytes: number | null;
+  fileSizeLabel: string;
+  downloadUrl: string;
+  filename: string;
+}
+
 export interface MediaInspectResult {
   success: boolean;
   platform: Platform;
   contentType: ContentType;
   cleanUrl: string;
+  contentId?: string;
   metadata: {
     platform: Platform;
     title: string;
@@ -107,6 +118,16 @@ export interface MediaInspectResult {
     authorUrl?: string;
     thumbnailUrl: string;
     type: ContentType;
+  };
+  videoDownloadInfo: {
+    supported: boolean;
+    availableStreams: VideoStreamOption[];
+    unsupportedReason: string;
+  };
+  thumbnailInfo: {
+    proxyUrl: string;
+    originalUrl: string;
+    youtubeVideoId?: string;
   };
   permittedAssets: Array<{
     id: string;
