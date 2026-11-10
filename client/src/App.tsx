@@ -1,24 +1,25 @@
 import React, { useState, Suspense } from 'react';
-import { Download, Sparkles, ArrowRight, Loader2 } from 'lucide-react';
+import { Download, Maximize2, ArrowRight, Loader2 } from 'lucide-react';
 import { Navbar } from './components/Navbar';
 import { Hero } from './components/Hero';
 import { UrlGenerator } from './components/UrlGenerator';
 import { ResultCard } from './components/ResultCard';
 import { Footer } from './components/Footer';
 import { AppView, GeneratedLinkResult } from './types';
+import type { UpscalerInitialSource } from './components/ImageUpscaler';
 
 const ThumbnailDownloader = React.lazy(() =>
   import('./components/ThumbnailDownloader').then((m) => ({ default: m.ThumbnailDownloader }))
 );
-const AiThumbnailGenerator = React.lazy(() =>
-  import('./components/AiThumbnailGenerator').then((m) => ({ default: m.AiThumbnailGenerator }))
+const ImageUpscaler = React.lazy(() =>
+  import('./components/ImageUpscaler').then((m) => ({ default: m.ImageUpscaler }))
 );
 
 export const App: React.FC = () => {
   const [activeView, setActiveView] = useState<AppView>('links');
   const [currentResult, setCurrentResult] = useState<GeneratedLinkResult | null>(null);
   const [thumbnailTargetUrl, setThumbnailTargetUrl] = useState<string>('');
-  const [aiTopic, setAiTopic] = useState<string>('');
+  const [upscalerSource, setUpscalerSource] = useState<UpscalerInitialSource | null>(null);
 
   const handleOpenThumbnails = (url?: string) => {
     if (url) setThumbnailTargetUrl(url);
@@ -26,9 +27,9 @@ export const App: React.FC = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleOpenAi = (topic?: string) => {
-    if (topic) setAiTopic(topic);
-    setActiveView('ai');
+  const handleSendToUpscaler = (source?: UpscalerInitialSource) => {
+    if (source) setUpscalerSource(source);
+    setActiveView('upscaler');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -67,24 +68,24 @@ export const App: React.FC = () => {
                 </div>
                 <h2 className="text-sm font-bold text-white">YouTube Thumbnail Downloader</h2>
                 <p className="text-xs text-zinc-400 mt-1">
-                  Download official HD, SD, and HQ thumbnails from YouTube videos and Shorts.
+                  Download YouTube video &amp; Shorts thumbnails in maximum source quality or Full HD (1080p).
                 </p>
               </button>
 
               <button
                 type="button"
-                onClick={() => handleOpenAi()}
+                onClick={() => handleSendToUpscaler()}
                 className="group text-left p-5 rounded-2xl glass-card hover:border-zinc-700 transition-colors"
               >
                 <div className="flex items-center justify-between mb-2">
                   <span className="w-9 h-9 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400">
-                    <Sparkles className="w-4 h-4" />
+                    <Maximize2 className="w-4 h-4" />
                   </span>
                   <ArrowRight className="w-4 h-4 text-zinc-500 group-hover:text-white group-hover:translate-x-0.5 transition-all" />
                 </div>
-                <h2 className="text-sm font-bold text-white">AI Thumbnail Generator</h2>
+                <h2 className="text-sm font-bold text-white">Image Upscaler</h2>
                 <p className="text-xs text-zinc-400 mt-1">
-                  Generate custom thumbnail backgrounds with NVIDIA FLUX.1-dev and export 1280&times;720 YouTube covers cleanly.
+                  Upscale thumbnails and photos cleanly to Full HD (1920px), 2&times;, 4&times;, or 4K UHD.
                 </p>
               </button>
             </div>
@@ -102,11 +103,11 @@ export const App: React.FC = () => {
           {activeView === 'thumbnails' && (
             <ThumbnailDownloader
               initialUrl={thumbnailTargetUrl}
-              onOpenAiGenerator={(t) => handleOpenAi(t)}
+              onSendToUpscaler={(src) => handleSendToUpscaler(src)}
             />
           )}
 
-          {activeView === 'ai' && <AiThumbnailGenerator initialTopic={aiTopic} />}
+          {activeView === 'upscaler' && <ImageUpscaler initialSource={upscalerSource} />}
         </Suspense>
       </main>
 

@@ -173,10 +173,15 @@ async function runTests() {
     });
     assert.strictEqual(nonYtThumb.status, 400);
 
-    const aiCfg = await fetch('http://localhost:3000/api/ai/config').then((r) => r.json());
-    assert.strictEqual(aiCfg.success, true);
-    assert.ok(aiCfg.model.includes('flux'));
-    console.log('[Pass 11] Dedicated YouTube Thumbnail Downloader & AI Config verified');
+    const thumbBestRes = await fetch('http://localhost:3000/api/thumbnails/image?videoId=dQw4w9WgXcQ&quality=best');
+    assert.strictEqual(thumbBestRes.status, 200);
+    assert.strictEqual(thumbBestRes.headers.get('content-type'), 'image/jpeg');
+    assert.ok(Number(thumbBestRes.headers.get('x-thumbnail-width')) >= 1280);
+
+    // Removed AI routes must cleanly return 404 JSON
+    const removedAi = await fetch('http://localhost:3000/api/ai/config');
+    assert.strictEqual(removedAi.status, 404);
+    console.log('[Pass 11] Dedicated YouTube Thumbnail Downloader (max quality source) & removed AI routes (404) verified');
 
     console.log('=== ALL 11 MULTI-PLATFORM E2E TESTS PASSED ===');
   } catch (err) {

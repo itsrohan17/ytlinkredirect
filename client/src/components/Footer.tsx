@@ -17,7 +17,7 @@ export const Footer: React.FC = () => {
         </div>
 
         <p className="text-center sm:text-right text-[11px]">
-          &copy; {new Date().getFullYear()} LinkTwin. Not affiliated with YouTube, Instagram, Facebook, or NVIDIA.
+          &copy; {new Date().getFullYear()} LinkTwin. Not affiliated with YouTube, Instagram, or Facebook.
         </p>
       </div>
     </footer>

@@ -8,13 +8,11 @@ import { fileURLToPath } from 'url';
 import { getDatabaseMode, getLinkByCode } from './db.js';
 import { linksRouter } from './routes/links.js';
 import { thumbnailsRouter } from './routes/thumbnails.js';
-import { aiRouter } from './routes/ai.js';
 import {
   enforceSameOriginOnMutations,
   getAllowedOrigins,
   isSessionSecretConfigured,
 } from './services/session.js';
-import { getConfiguredNvidiaModel, isNvidiaAiConfigured } from './services/nvidiaFlux.js';
 import { handleSmartRedirect } from './redirect.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -85,8 +83,6 @@ function buildHealthPayload() {
     capabilities: {
       databaseMode: getDatabaseMode(),
       sessionConfigured: isSessionSecretConfigured(),
-      aiConfigured: isNvidiaAiConfigured(),
-      aiModel: getConfiguredNvidiaModel(),
     },
   };
 }
@@ -100,9 +96,6 @@ app.get('/api/health', (_req, res) => {
 });
 
 // Core product API routers (CSRF origin-enforced + rate-limited)
-app.use('/api/ai', enforceSameOriginOnMutations, apiReadLimiter, aiRouter);
-app.use('/ai', enforceSameOriginOnMutations, apiReadLimiter, aiRouter);
-
 app.use('/api/thumbnails', enforceSameOriginOnMutations, apiReadLimiter, writeLimiter, thumbnailsRouter);
 app.use('/thumbnails', enforceSameOriginOnMutations, apiReadLimiter, writeLimiter, thumbnailsRouter);
 app.use('/api/media', apiReadLimiter, thumbnailsRouter); // Preserves legacy /api/media/thumbnail?videoId=...&quality=...
@@ -129,7 +122,6 @@ app.get('/:code', async (req, res, next) => {
     code === 'thumbnails' ||
     code === 'thumbnail' ||
     code === 'media' ||
-    code === 'ai' ||
     code === 'summary'
   ) {
     return next();
@@ -155,8 +147,7 @@ if (fs.existsSync(clientDistPath) && !process.env.VERCEL) {
     if (
       req.path.startsWith('/api') ||
       req.path.startsWith('/links') ||
-      req.path.startsWith('/thumbnails') ||
-      req.path.startsWith('/ai')
+      req.path.startsWith('/thumbnails')
     ) {
       return next();
     }
@@ -169,8 +160,7 @@ app.use((req, res, next) => {
   if (
     req.path.startsWith('/api') ||
     req.path.startsWith('/links') ||
-    req.path.startsWith('/thumbnails') ||
-    req.path.startsWith('/ai')
+    req.path.startsWith('/thumbnails')
   ) {
     return res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.originalUrl}` });
   }

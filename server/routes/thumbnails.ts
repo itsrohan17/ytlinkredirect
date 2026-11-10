@@ -25,6 +25,30 @@ const QUALITY_TO_SPEC = new Map<string, ResolutionSpec>(
   YOUTUBE_RESOLUTIONS.map((s) => [s.quality, s])
 );
 
+function extractJpegDimensions(buf: Buffer): { width: number; height: number } | null {
+  if (buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8) return null;
+  let offset = 2;
+  while (offset + 4 < buf.length) {
+    if (buf[offset] !== 0xff) break;
+    const marker = buf[offset + 1];
+    if (marker === 0xd9 || marker === 0xda) break;
+    if (marker === 0x00 || (marker >= 0xd0 && marker <= 0xd7) || marker === 0x01) {
+      offset += 2;
+      continue;
+    }
+    const segLen = buf.readUInt16BE(offset + 2);
+    if (segLen < 2 || offset + 2 + segLen > buf.length) break;
+    // SOF0..SOF3 cover baseline, extended sequential, progressive, lossless JPEGs
+    if ((marker >= 0xc0 && marker <= 0xc3) && segLen >= 7 && offset + 9 <= buf.length) {
+      const height = buf.readUInt16BE(offset + 5);
+      const width = buf.readUInt16BE(offset + 7);
+      if (width > 0 && height > 0) return { width, height };
+    }
+    offset += 2 + segLen;
+  }
+  return null;
+}
+
 // POST /api/thumbnails/inspect - Extract YouTube videoId & probe real available thumbnail resolutions
 thumbnailsRouter.post('/inspect', async (req: Request, res: Response) => {
   try {
@@ -107,7 +131,7 @@ thumbnailsRouter.post('/inspect', async (req: Request, res: Response) => {
 thumbnailsRouter.get(['/image', '/thumbnail'], async (req: Request, res: Response) => {
   try {
     const videoId = String(req.query.videoId || '');
-    const quality = String(req.query.quality || 'maxres');
+    const quality = String(req.query.quality || 'best').toLowerCase();
     const inline = req.query.inline === '1';
     const allowFallback = req.query.fallback === '1';
 
@@ -115,35 +139,69 @@ thumbnailsRouter.get(['/image', '/thumbnail'], async (req: Request, res: Respons
       return res.status(400).json({ error: 'Invalid YouTube video ID.' });
     }
 
-    const spec = QUALITY_TO_SPEC.get(quality) || YOUTUBE_RESOLUTIONS[0];
-    let targetUrl = `https://i.ytimg.com/vi/${videoId}/${spec.filenameSuffix}`;
-    let imgRes = await safeFetchExternalUrl(targetUrl, {
-      timeoutMs: 4000,
-      maxBytes: 5 * 1024 * 1024,
-      maxRedirects: 1,
-    });
+    let chosenSpec = QUALITY_TO_SPEC.get(quality) || YOUTUBE_RESOLUTIONS[0];
+    let imgRes: Awaited<ReturnType<typeof safeFetchExternalUrl>> | null = null;
 
-    if (imgRes.status >= 400 && allowFallback && spec.filenameSuffix !== 'hqdefault.jpg') {
-      targetUrl = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+    if (quality === 'best') {
+      for (const candidate of YOUTUBE_RESOLUTIONS) {
+        const candidateUrl = `https://i.ytimg.com/vi/${videoId}/${candidate.filenameSuffix}`;
+        try {
+          const probe = await safeFetchExternalUrl(candidateUrl, {
+            timeoutMs: 4000,
+            maxBytes: 10 * 1024 * 1024,
+            maxRedirects: 1,
+          });
+          if (probe.status >= 200 && probe.status < 300) {
+            chosenSpec = candidate;
+            imgRes = probe;
+            break;
+          }
+        } catch {
+          // Try next lower resolution tier
+        }
+      }
+    } else {
+      const targetUrl = `https://i.ytimg.com/vi/${videoId}/${chosenSpec.filenameSuffix}`;
       imgRes = await safeFetchExternalUrl(targetUrl, {
         timeoutMs: 4000,
-        maxBytes: 5 * 1024 * 1024,
+        maxBytes: 10 * 1024 * 1024,
         maxRedirects: 1,
+      });
+
+      if (imgRes.status >= 400 && allowFallback && chosenSpec.filenameSuffix !== 'hqdefault.jpg') {
+        const fallbackSpec = QUALITY_TO_SPEC.get('hq')!;
+        const fallbackUrl = `https://i.ytimg.com/vi/${videoId}/${fallbackSpec.filenameSuffix}`;
+        const fallbackRes = await safeFetchExternalUrl(fallbackUrl, {
+          timeoutMs: 4000,
+          maxBytes: 10 * 1024 * 1024,
+          maxRedirects: 1,
+        });
+        if (fallbackRes.status >= 200 && fallbackRes.status < 300) {
+          chosenSpec = fallbackSpec;
+          imgRes = fallbackRes;
+        }
+      }
+    }
+
+    if (!imgRes || imgRes.status >= 400) {
+      return res.status(404).json({
+        error: `Thumbnail resolution (${chosenSpec.resolution}) is not available for this video.`,
       });
     }
 
-    if (imgRes.status >= 400) {
-      return res.status(404).json({
-        error: `Thumbnail resolution (${spec.resolution}) is not available for this video.`,
-      });
-    }
+    const parsedDims = extractJpegDimensions(imgRes.bodyBuffer);
+    const outW = parsedDims?.width || chosenSpec.width;
+    const outH = parsedDims?.height || chosenSpec.height;
 
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('X-Thumbnail-Quality', chosenSpec.quality);
+    res.setHeader('X-Thumbnail-Width', String(outW));
+    res.setHeader('X-Thumbnail-Height', String(outH));
     if (!inline) {
       res.setHeader(
         'Content-Disposition',
-        `attachment; filename="youtube-${videoId}-${spec.width}x${spec.height}.jpg"`
+        `attachment; filename="youtube-${videoId}-${outW}x${outH}.jpg"`
       );
     }
     res.setHeader('Cache-Control', 'public, max-age=86400');

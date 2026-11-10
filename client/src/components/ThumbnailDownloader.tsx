@@ -6,14 +6,16 @@ import {
   AlertCircle,
   CheckCircle2,
   XCircle,
-  Sparkles,
+  Maximize2,
   Image as ImageIcon,
 } from 'lucide-react';
 import { ThumbnailInspectResult, ThumbnailVariant } from '../types';
+import { upscaleImageElement } from '../utils/imageUpscaler';
+import type { UpscalerInitialSource } from './ImageUpscaler';
 
 interface ThumbnailDownloaderProps {
   initialUrl?: string;
-  onOpenAiGenerator?: (topic?: string) => void;
+  onSendToUpscaler?: (source: UpscalerInitialSource) => void;
 }
 
 function formatBytesShort(bytes: number | null): string {
@@ -25,13 +27,14 @@ function formatBytesShort(bytes: number | null): string {
 
 export const ThumbnailDownloader: React.FC<ThumbnailDownloaderProps> = ({
   initialUrl,
-  onOpenAiGenerator,
+  onSendToUpscaler,
 }) => {
   const [urlInput, setUrlInput] = useState(initialUrl || '');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ThumbnailInspectResult | null>(null);
   const [convertingPngId, setConvertingPngId] = useState<string | null>(null);
+  const [downloadingFullHd, setDownloadingFullHd] = useState<boolean>(false);
 
   const inspectYouTubeUrl = async (targetUrl?: string) => {
     const cleanUrl = (targetUrl ?? urlInput).trim();
@@ -113,6 +116,36 @@ export const ThumbnailDownloader: React.FC<ThumbnailDownloaderProps> = ({
       setError(err?.message || 'Failed to download PNG.');
     } finally {
       setConvertingPngId(null);
+    }
+  };
+
+  const handleDownloadFullHd = async (variant: ThumbnailVariant) => {
+    if (!result) return;
+    setDownloadingFullHd(true);
+    try {
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image();
+        el.crossOrigin = 'anonymous';
+        el.onload = () => resolve(el);
+        el.onerror = () => reject(new Error('Failed to load source thumbnail for Full HD export.'));
+        el.src = variant.previewUrl;
+      });
+      const upscaled = await upscaleImageElement(img, {
+        preset: '1080p',
+        sharpnessPct: 40,
+        outputFormat: 'png',
+      });
+      const a = document.createElement('a');
+      a.href = upscaled.objectUrl;
+      a.download = `youtube-${result.videoId}-fullhd-${upscaled.width}x${upscaled.height}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(upscaled.objectUrl);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to export Full HD thumbnail.');
+    } finally {
+      setDownloadingFullHd(false);
     }
   };
 
@@ -227,20 +260,33 @@ export const ThumbnailDownloader: React.FC<ThumbnailDownloaderProps> = ({
                         : ''}
                     </span>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
                       type="button"
                       onClick={() => handleDownloadJpg(result.highestAvailable!)}
                       className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 text-xs font-bold transition-colors"
                     >
                       <Download className="w-3.5 h-3.5" />
-                      Download JPG
+                      Original Max JPG
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadFullHd(result.highestAvailable!)}
+                      disabled={downloadingFullHd}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition-colors disabled:opacity-60"
+                    >
+                      {downloadingFullHd ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Download className="w-3.5 h-3.5" />
+                      )}
+                      Full HD (1080p PNG)
                     </button>
                     <button
                       type="button"
                       onClick={() => handleDownloadPng(result.highestAvailable!)}
                       disabled={convertingPngId === result.highestAvailable.quality}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-100 text-xs font-semibold border border-zinc-700 transition-colors"
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-100 text-xs font-semibold border border-zinc-700 transition-colors"
                     >
                       {convertingPngId === result.highestAvailable.quality ? (
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -257,14 +303,20 @@ export const ThumbnailDownloader: React.FC<ThumbnailDownloaderProps> = ({
                 </div>
               )}
 
-              {onOpenAiGenerator && (
+              {onSendToUpscaler && result.highestAvailable && (
                 <button
                   type="button"
-                  onClick={() => onOpenAiGenerator(result.metadata.title)}
+                  onClick={() =>
+                    onSendToUpscaler({
+                      url: result.highestAvailable!.previewUrl,
+                      filename: result.highestAvailable!.filename,
+                      label: `${result.metadata.title} (${result.highestAvailable!.resolution})`,
+                    })
+                  }
                   className="inline-flex items-center gap-1.5 text-xs text-zinc-400 hover:text-white transition-colors"
                 >
-                  <Sparkles className="w-3.5 h-3.5 text-red-400" />
-                  Want to create a new custom thumbnail for this video? Open AI Thumbnail Generator &rarr;
+                  <Maximize2 className="w-3.5 h-3.5 text-emerald-400" />
+                  Need 2&times;, 4&times;, or 4K resolution? Open in Image Upscaler &rarr;
                 </button>
               )}
             </div>
@@ -322,6 +374,22 @@ export const ThumbnailDownloader: React.FC<ThumbnailDownloaderProps> = ({
                       >
                         {convertingPngId === variant.quality ? '...' : 'PNG'}
                       </button>
+                      {onSendToUpscaler && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onSendToUpscaler({
+                              url: variant.previewUrl,
+                              filename: variant.filename,
+                              label: `${result.metadata.title} (${variant.resolution})`,
+                            })
+                          }
+                          title="Send to Image Upscaler"
+                          className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-emerald-400 border border-zinc-700"
+                        >
+                          <Maximize2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>

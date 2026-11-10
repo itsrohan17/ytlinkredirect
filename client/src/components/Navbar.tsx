@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Link2, Download, Sparkles } from 'lucide-react';
+import { Play, Link2, Download, Maximize2 } from 'lucide-react';
 import { AppView } from '../types';
 
 interface NavbarProps {
@@ -10,7 +10,7 @@ interface NavbarProps {
 const NAV_ITEMS: Array<{ id: AppView; label: string; icon: React.ReactNode }> = [
   { id: 'links', label: 'Smart Links', icon: <Link2 className="w-4 h-4" /> },
   { id: 'thumbnails', label: 'Thumbnail Downloader', icon: <Download className="w-4 h-4" /> },
-  { id: 'ai', label: 'AI Thumbnail Generator', icon: <Sparkles className="w-4 h-4" /> },
+  { id: 'upscaler', label: 'Image Upscaler', icon: <Maximize2 className="w-4 h-4" /> },
 ];
 
 export const Navbar: React.FC<NavbarProps> = ({ activeView, onSelectView }) => {

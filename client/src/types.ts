@@ -10,7 +10,7 @@ export type ContentType =
   | 'post'
   | 'profile';
 
-export type AppView = 'links' | 'thumbnails' | 'ai';
+export type AppView = 'links' | 'thumbnails' | 'upscaler';
 
 export interface LinkRecord {
   id: number;
@@ -77,53 +77,4 @@ export interface ThumbnailInspectResult {
   };
   highestAvailable: ThumbnailVariant | null;
   resolutions: ThumbnailVariant[];
-}
-
-export type ThumbnailStylePreset =
-  | 'gaming'
-  | 'tech'
-  | 'cinematic'
-  | 'documentary'
-  | 'reaction'
-  | 'tutorial'
-  | 'entertainment'
-  | 'none';
-
-export type FluxResolutionId = '1344x768' | '1280x768' | '1216x832' | '1024x1024' | '768x1344';
-
-export interface AiResolutionOption {
-  id: FluxResolutionId;
-  label: string;
-  aspectRatio: '7:4' | '5:3' | '3:2' | '1:1' | '4:7';
-  width: number;
-  height: number;
-}
-
-export interface AiConfigResponse {
-  success: boolean;
-  configured: boolean;
-  model: string;
-  multiVariationPerCallSupported: boolean;
-  defaultResolution: FluxResolutionId;
-  resolutions: AiResolutionOption[];
-  presets: ThumbnailStylePreset[];
-  limits: {
-    maxPromptLength: number;
-    maxTopicLength: number;
-    minSteps: number;
-    maxSteps: number;
-    defaultSteps: number;
-    minCfgScale: number;
-    maxCfgScale: number;
-    defaultCfgScale: number;
-  };
-}
-
-export interface AiGeneratedImage {
-  model: string;
-  seed: number;
-  width: number;
-  height: number;
-  mimeType: 'image/jpeg' | 'image/png' | 'image/webp';
-  dataUrl: string;
 }
