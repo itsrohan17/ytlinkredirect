@@ -39,7 +39,7 @@ aiRouter.get('/config', (_req: Request, res: Response) => {
     configured: isNvidiaAiConfigured(),
     model: getConfiguredNvidiaModel(),
     multiVariationPerCallSupported: false,
-    defaultResolution: '1280x720',
+    defaultResolution: '1344x768',
     resolutions: Object.values(FLUX_RESOLUTIONS),
     presets: Array.from(VALID_PRESETS).filter((p) => p !== 'none'),
     limits: {
@@ -62,7 +62,7 @@ aiRouter.post('/thumbnail', aiGenerateLimiter, async (req: Request, res: Respons
     const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
     const topic = typeof body.topic === 'string' ? body.topic.trim() : '';
     const preset = String(body.preset || 'none').toLowerCase() as ThumbnailStylePreset;
-    const resolution = String(body.resolution || '1280x720') as FluxResolutionId;
+    const resolution = String(body.resolution || '1344x768') as FluxResolutionId;
 
     if (!prompt || prompt.length < 3) {
       return res.status(400).json({ error: 'Please enter a descriptive image prompt (at least 3 characters).' });

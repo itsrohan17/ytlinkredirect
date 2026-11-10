@@ -89,7 +89,7 @@ export type ThumbnailStylePreset =
   | 'entertainment'
   | 'none';
 
-export type FluxResolutionId = '1280x720' | '1344x768' | '1024x576' | '1024x1024' | '768x1344';
+export type FluxResolutionId = '1344x768' | '1280x768' | '1216x832' | '1024x1024' | '768x1344';
 
 export interface AiResolutionOption {
   id: FluxResolutionId;

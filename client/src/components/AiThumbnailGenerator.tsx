@@ -37,7 +37,7 @@ export const AiThumbnailGenerator: React.FC<AiThumbnailGeneratorProps> = ({ init
   const [topic, setTopic] = useState(initialTopic || '');
   const [prompt, setPrompt] = useState('');
   const [preset, setPreset] = useState<ThumbnailStylePreset>('tech');
-  const [resolution, setResolution] = useState<FluxResolutionId>('1280x720');
+  const [resolution, setResolution] = useState<FluxResolutionId>('1344x768');
   const [steps, setSteps] = useState<number>(28);
   const [cfgScale, setCfgScale] = useState<number>(3.5);
   const [seedInput, setSeedInput] = useState<string>('0');
@@ -250,9 +250,9 @@ export const AiThumbnailGenerator: React.FC<AiThumbnailGeneratorProps> = ({ init
               >
                 {(
                   config?.resolutions || [
-                    { id: '1280x720', label: '1280 × 720 (YouTube HD 16:9)' },
-                    { id: '1344x768', label: '1344 × 768 (16:9 High Detail)' },
-                    { id: '1024x576', label: '1024 × 576 (16:9 Fast)' },
+                    { id: '1344x768', label: '1344 × 768 (16:9 Widescreen)' },
+                    { id: '1280x768', label: '1280 × 768 (5:3 Landscape)' },
+                    { id: '1216x832', label: '1216 × 832 (3:2 Landscape)' },
                     { id: '1024x1024', label: '1024 × 1024 (1:1 Square)' },
                     { id: '768x1344', label: '768 × 1344 (9:16 Vertical)' },
                   ]

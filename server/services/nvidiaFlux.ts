@@ -8,20 +8,22 @@ export type ThumbnailStylePreset =
   | 'entertainment'
   | 'none';
 
-export type FluxResolutionId = '1280x720' | '1344x768' | '1024x576' | '1024x1024' | '768x1344';
+export type FluxResolutionId = '1344x768' | '1280x768' | '1216x832' | '1024x1024' | '768x1344';
 
 export interface FluxResolutionSpec {
   id: FluxResolutionId;
   label: string;
-  aspectRatio: '16:9' | '1:1' | '9:16';
+  aspectRatio: '16:9' | '5:3' | '3:2' | '1:1' | '9:16';
   width: number;
   height: number;
 }
 
+// Width and height must strictly match the official NVIDIA NIM FLUX.1-dev integer enum:
+// [768, 832, 896, 960, 1024, 1088, 1152, 1216, 1280, 1344]
 export const FLUX_RESOLUTIONS: Record<FluxResolutionId, FluxResolutionSpec> = {
-  '1280x720': { id: '1280x720', label: '1280 × 720 (YouTube HD 16:9)', aspectRatio: '16:9', width: 1280, height: 720 },
-  '1344x768': { id: '1344x768', label: '1344 × 768 (16:9 High Detail)', aspectRatio: '16:9', width: 1344, height: 768 },
-  '1024x576': { id: '1024x576', label: '1024 × 576 (16:9 Fast)', aspectRatio: '16:9', width: 1024, height: 576 },
+  '1344x768': { id: '1344x768', label: '1344 × 768 (16:9 Widescreen)', aspectRatio: '16:9', width: 1344, height: 768 },
+  '1280x768': { id: '1280x768', label: '1280 × 768 (5:3 Landscape)', aspectRatio: '5:3', width: 1280, height: 768 },
+  '1216x832': { id: '1216x832', label: '1216 × 832 (3:2 Landscape)', aspectRatio: '3:2', width: 1216, height: 832 },
   '1024x1024': { id: '1024x1024', label: '1024 × 1024 (1:1 Square)', aspectRatio: '1:1', width: 1024, height: 1024 },
   '768x1344': { id: '768x1344', label: '768 × 1344 (9:16 Vertical)', aspectRatio: '9:16', width: 768, height: 1344 },
 };
@@ -75,7 +77,19 @@ export function buildNvidiaInvokeUrl(model: string): string {
   if (base.endsWith('/infer') || base.endsWith(`/${model}`)) {
     return base;
   }
-  return `${base}/${model}`;
+  if (base.endsWith('/v1/genai')) {
+    return `${base}/${model}`;
+  }
+  if (/^https?:\/\/ai\.api\.nvidia\.com$/i.test(base)) {
+    return `${base}/v1/genai/${model}`;
+  }
+  if (/^https?:\/\/ai\.api\.nvidia\.com\/v1$/i.test(base)) {
+    return `${base}/genai/${model}`;
+  }
+  if (base.endsWith('/v1')) {
+    return `${base}/infer`;
+  }
+  return `${base}/v1/infer`;
 }
 
 export function buildThumbnailPrompt(options: {
@@ -143,7 +157,7 @@ export async function generateFluxThumbnail(
     );
   }
 
-  const resSpec = FLUX_RESOLUTIONS[params.resolution || '1280x720'] || FLUX_RESOLUTIONS['1280x720'];
+  const resSpec = FLUX_RESOLUTIONS[params.resolution || '1344x768'] || FLUX_RESOLUTIONS['1344x768'];
   const steps = Math.min(50, Math.max(5, Math.round(Number(params.steps ?? 28))));
   const cfgScale = Math.min(9, Math.max(1, Number(params.cfgScale ?? 3.5)));
   const rawSeed = Math.round(Number(params.seed ?? 0));
