@@ -1,89 +1,168 @@
+import assert from 'assert';
+
 async function runTests() {
-  console.log('=== STARTING AUTOMATED TEST SUITE ===');
+  console.log('=== STARTING COMPREHENSIVE MULTI-PLATFORM E2E SUITE ===');
 
   try {
     // Test 1: Frontend SPA
     const homeRes = await fetch('http://localhost:3000');
     const homeHtml = await homeRes.text();
-    console.log('[Test 1] Frontend HTML served:', homeRes.status === 200 && homeHtml.includes('LinkTwin'));
+    assert.strictEqual(homeRes.status, 200);
+    assert.ok(homeHtml.includes('LinkTwin'));
+    console.log('[Pass 1] Frontend SPA served');
 
-    // Test 2: Standard Video
-    const videoRes = await fetch('http://localhost:3000/api/links', {
+    // Test 2: YouTube Video + Backward Compatibility
+    const ytRes = await fetch('http://localhost:3000/api/links', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' })
+      body: JSON.stringify({ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' }),
     });
-    const videoData = await videoRes.json();
-    console.log('[Test 2] Video created:', videoData.success, 'Type:', videoData.link.url_type, 'Code:', videoData.link.code);
+    const ytData = await ytRes.json();
+    assert.strictEqual(ytRes.status, 201);
+    assert.strictEqual(ytData.link.platform, 'youtube');
+    assert.strictEqual(ytData.link.url_type, 'video');
+    console.log('[Pass 2] YouTube Video created:', ytData.link.code);
 
-    // Test 3: Shorts
+    // Test 3: YouTube Shorts
     const shortsRes = await fetch('http://localhost:3000/api/links', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: 'https://www.youtube.com/shorts/5-x1qKq2f1Q' })
+      body: JSON.stringify({ url: 'https://www.youtube.com/shorts/5-x1qKq2f1Q' }),
     });
     const shortsData = await shortsRes.json();
-    console.log('[Test 3] Shorts created:', shortsData.success, 'Type:', shortsData.link.url_type, 'Intent has shorts:', shortsData.parsed.androidIntentUrl.includes('shorts'));
+    assert.strictEqual(shortsRes.status, 201);
+    assert.strictEqual(shortsData.link.platform, 'youtube');
+    assert.strictEqual(shortsData.link.url_type, 'shorts');
+    assert.ok(shortsData.parsed.androidIntentUrl.includes('shorts'));
+    console.log('[Pass 3] YouTube Shorts created:', shortsData.link.code);
 
-    // Test 4: Custom Slug
-    const customSlug = 'rickroll-' + Math.floor(Math.random() * 10000);
-    const customRes = await fetch('http://localhost:3000/api/links', {
+    // Test 4: Instagram Reel + Android Intent + iOS Universal Link
+    const igRes = await fetch('http://localhost:3000/api/links', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', customSlug })
+      body: JSON.stringify({ url: 'https://www.instagram.com/reel/C0xample123/' }),
     });
-    const customData = await customRes.json();
-    console.log('[Test 4] Custom slug created:', customData.link.code === customSlug);
+    const igData = await igRes.json();
+    assert.strictEqual(igRes.status, 201);
+    assert.strictEqual(igData.link.platform, 'instagram');
+    assert.strictEqual(igData.link.url_type, 'reel');
+    assert.ok(igData.parsed.androidIntentUrl.includes('com.instagram.android'));
+    assert.strictEqual(igData.parsed.iosPreferUniversalLink, true);
+    console.log('[Pass 4] Instagram Reel created:', igData.link.code);
 
-    // Test 5: Duplicate Slug Conflict Check
-    const dupRes = await fetch('http://localhost:3000/api/links', {
+    // Test 5: Facebook Reel / Watch Video
+    const fbRes = await fetch('http://localhost:3000/api/links', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', customSlug })
+      body: JSON.stringify({ url: 'https://www.facebook.com/watch/?v=10153231379946729' }),
     });
-    console.log('[Test 5] Duplicate slug rejected (409):', dupRes.status === 409);
+    const fbData = await fbRes.json();
+    assert.strictEqual(fbRes.status, 201);
+    assert.strictEqual(fbData.link.platform, 'facebook');
+    assert.strictEqual(fbData.link.url_type, 'video');
+    assert.ok(fbData.parsed.androidIntentUrl.includes('com.facebook.katana'));
+    console.log('[Pass 5] Facebook Video created:', fbData.link.code);
 
-    // Test 6: Security - Malicious/Non-YouTube URL rejected
+    // Test 6: Reject unsupported domain
     const badRes = await fetch('http://localhost:3000/api/links', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: 'https://malicious-phishing-site.com/login' })
+      body: JSON.stringify({ url: 'https://malicious-phishing-site.com/login' }),
     });
-    console.log('[Test 6] Malicious URL blocked (400):', badRes.status === 400);
+    assert.strictEqual(badRes.status, 400);
+    console.log('[Pass 6] Unsupported URL blocked (400)');
 
-    // Test 7: WhatsApp Crawler OpenGraph response
-    const waRes = await fetch('http://localhost:3000/' + customSlug, {
-      headers: { 'User-Agent': 'WhatsApp/2.21.4.18 A' }
+    // Test 7: WhatsApp OpenGraph on Instagram & Facebook links
+    const igWa = await fetch('http://localhost:3000/' + igData.link.code, {
+      headers: { 'User-Agent': 'WhatsApp/2.21.4.18 A' },
     });
-    const waHtml = await waRes.text();
-    console.log('[Test 7] WhatsApp OpenGraph returned:', waHtml.includes('property="og:title"') && waHtml.includes('property="og:image"'));
+    const igWaHtml = await igWa.text();
+    assert.ok(igWaHtml.includes('property="og:title"') && igWaHtml.includes('com.instagram.android'));
 
-    // Test 8: Mobile Android Intent response
-    const androidRes = await fetch('http://localhost:3000/' + customSlug, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36' },
-      redirect: 'manual'
+    const fbWa = await fetch('http://localhost:3000/' + fbData.link.code, {
+      headers: { 'User-Agent': 'TelegramBot (like TwitterBot)' },
     });
-    const androidHtml = await androidRes.text();
-    console.log('[Test 8] Android Intent interstitial served:', androidHtml.includes('intent://') && androidHtml.includes('Open in YouTube App'));
+    const fbWaHtml = await fbWa.text();
+    assert.ok(fbWaHtml.includes('property="og:title"') && fbWaHtml.includes('com.facebook.katana'));
+    console.log('[Pass 7] WhatsApp & Telegram OpenGraph previews verified for IG & FB');
+
+    // Test 8: Mobile Android & iOS Redirections + Country header tracking
+    const androidIg = await fetch('http://localhost:3000/' + igData.link.code, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/122.0.0.0 Mobile Safari/537.36',
+        'x-vercel-ip-country': 'IN',
+        'referer': 'https://www.whatsapp.com/',
+      },
+      redirect: 'manual',
+    });
+    const androidIgHtml = await androidIg.text();
+    assert.ok(androidIgHtml.includes('intent://') && androidIgHtml.includes('Open in Instagram App'));
+
+    const iosFb = await fetch('http://localhost:3000/' + fbData.link.code, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1',
+        'x-vercel-ip-country': 'US',
+      },
+      redirect: 'manual',
+    });
+    const iosFbHtml = await iosFb.text();
+    assert.ok(iosFbHtml.includes('fb://facewebmodal/f') && iosFbHtml.includes('Open in Facebook App'));
+    console.log('[Pass 8] Android & iOS mobile redirect pages verified');
 
     // Test 9: Desktop 302 instant redirect
-    const desktopRes = await fetch('http://localhost:3000/' + customSlug, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-      redirect: 'manual'
+    const desktopFb = await fetch('http://localhost:3000/' + fbData.link.code, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0' },
+      redirect: 'manual',
     });
-    console.log('[Test 9] Desktop 302 redirect:', desktopRes.status === 302, 'Location:', desktopRes.headers.get('location'));
+    assert.strictEqual(desktopFb.status, 302);
+    assert.ok((desktopFb.headers.get('location') || '').includes('facebook.com'));
+    console.log('[Pass 9] Desktop 302 redirect verified');
 
-    // Wait a brief tick for async click recording in SQLite
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 250));
 
-    // Test 10: Real-time Stats in SQLite
-    const statsRes = await fetch('http://localhost:3000/api/links/' + customSlug + '/stats');
+    // Test 10: Advanced Analytics (Devices, Browsers, Countries, Referrers) & Global Summary
+    const statsRes = await fetch('http://localhost:3000/api/links/' + igData.link.code + '/stats');
     const statsData = await statsRes.json();
-    console.log('[Test 10] SQLite analytics recorded clicks:', statsData.stats.totalClicks > 0, 'Devices:', statsData.stats.devices);
+    assert.ok(statsData.stats.totalClicks >= 1);
+    assert.strictEqual(statsData.stats.countries['IN'], 1);
+    assert.ok(Object.keys(statsData.stats.browsers).length >= 1);
 
-    console.log('=== ALL 10 TESTS PASSED SUCCESFULLY ===');
+    const summaryRes = await fetch('http://localhost:3000/api/links/summary');
+    const summaryData = await summaryRes.json();
+    assert.ok(summaryData.summary.byPlatform.youtube.links >= 1);
+    assert.ok(summaryData.summary.byPlatform.instagram.links >= 1);
+    assert.ok(summaryData.summary.byPlatform.facebook.links >= 1);
+    console.log('[Pass 10] Advanced analytics & platform summary verified');
+
+    // Test 11: Media Tools API (YouTube thumbnail, IG/FB official guide)
+    const mediaYt = await fetch('http://localhost:3000/api/media/inspect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' }),
+    });
+    const mediaYtData = await mediaYt.json();
+    assert.strictEqual(mediaYt.status, 200);
+    assert.ok(mediaYtData.permittedAssets.length >= 3);
+    assert.ok(mediaYtData.embedCode.includes('youtube-nocookie.com'));
+
+    const thumbRes = await fetch('http://localhost:3000/api/media/thumbnail?videoId=dQw4w9WgXcQ&quality=hq');
+    assert.strictEqual(thumbRes.status, 200);
+    assert.strictEqual(thumbRes.headers.get('content-type'), 'image/jpeg');
+
+    const mediaIg = await fetch('http://localhost:3000/api/media/inspect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: 'https://www.instagram.com/reel/C0xample123/' }),
+    });
+    const mediaIgData = await mediaIg.json();
+    assert.strictEqual(mediaIg.status, 200);
+    assert.strictEqual(mediaIgData.permittedAssets.length, 0);
+    assert.ok(mediaIgData.unsupportedExplanation.length > 20);
+    console.log('[Pass 11] Media Tools API & safe thumbnail download verified');
+
+    console.log('=== ALL 11 MULTI-PLATFORM E2E TESTS PASSED ===');
   } catch (err) {
-    console.error('Test failed with error:', err);
+    console.error('E2E Test Failed:', err);
     process.exit(1);
   }
 }

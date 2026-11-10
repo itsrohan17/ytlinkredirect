@@ -1,15 +1,7 @@
 import React, { useState } from 'react';
-import { 
-  History, 
-  Copy, 
-  Check, 
-  ExternalLink, 
-  QrCode, 
-  BarChart3, 
-  Trash2,
-  Play
-} from 'lucide-react';
-import { GeneratedLinkResult } from '../types';
+import { History, Copy, Check, ExternalLink, QrCode, BarChart3, Trash2 } from 'lucide-react';
+import { GeneratedLinkResult, Platform } from '../types';
+import { PlatformIcon, getPlatformMeta } from './PlatformIcon';
 
 interface RecentHistoryProps {
   history: GeneratedLinkResult[];
@@ -45,7 +37,7 @@ export const RecentHistory: React.FC<RecentHistoryProps> = ({
           </div>
           <div>
             <h3 className="text-lg font-bold text-white">Your Generated Links</h3>
-            <p className="text-xs text-zinc-400">Quickly manage links generated in this session</p>
+            <p className="text-xs text-zinc-400">Quickly manage links created in this session</p>
           </div>
         </div>
 
@@ -59,86 +51,91 @@ export const RecentHistory: React.FC<RecentHistoryProps> = ({
       </div>
 
       <div className="space-y-3">
-        {history.map((item) => (
-          <div
-            key={item.link.code}
-            className="p-3.5 sm:p-4 rounded-xl glass-card border border-zinc-800/80 hover:border-zinc-700/80 transition flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-          >
-            {/* Left Info */}
-            <div className="flex items-center gap-3.5 min-w-0">
-              <div className="relative w-16 h-10 sm:w-20 sm:h-12 rounded-lg overflow-hidden bg-zinc-800 flex-shrink-0">
-                <img
-                  src={item.link.thumbnail_url}
-                  alt=""
-                  className="w-full h-full object-cover"
-                />
-                <div className="absolute inset-0 bg-black/20 flex items-center justify-center">
-                  <Play className="w-3.5 h-3.5 fill-white text-white ml-0.5" />
+        {history.map((item) => {
+          const platform: Platform = item.link.platform || item.parsed?.platform || 'youtube';
+          const brandMeta = getPlatformMeta(platform);
+
+          return (
+            <div
+              key={item.link.code}
+              className="p-3.5 sm:p-4 rounded-xl glass-card border border-zinc-800/80 hover:border-zinc-700/80 transition flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+            >
+              <div className="flex items-center gap-3.5 min-w-0">
+                <div className="relative w-16 h-10 sm:w-20 sm:h-12 rounded-lg overflow-hidden bg-zinc-800 flex-shrink-0">
+                  <img
+                    src={item.link.thumbnail_url}
+                    alt=""
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute inset-0 bg-black/25 flex items-center justify-center">
+                    <PlatformIcon platform={platform} className="w-4 h-4 text-white" />
+                  </div>
+                </div>
+
+                <div className="min-w-0">
+                  <h4 className="text-xs sm:text-sm font-bold text-white truncate max-w-xs sm:max-w-md">
+                    {item.link.title}
+                  </h4>
+                  <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                    <span className="font-mono text-xs font-semibold text-zinc-200">
+                      {item.shortUrl}
+                    </span>
+                    <span
+                      className={`inline-flex items-center gap-1 text-[10px] uppercase px-1.5 py-0.5 rounded border ${brandMeta.badgeClass}`}
+                    >
+                      {brandMeta.label} {item.link.url_type}
+                    </span>
+                  </div>
                 </div>
               </div>
 
-              <div className="min-w-0">
-                <h4 className="text-xs sm:text-sm font-bold text-white truncate max-w-xs sm:max-w-md">
-                  {item.link.title}
-                </h4>
-                <div className="flex items-center gap-2 mt-0.5">
-                  <span className="font-mono text-xs font-semibold text-red-400">
-                    {item.shortUrl}
-                  </span>
-                  <span className="text-[10px] text-zinc-500 uppercase px-1.5 py-0.2 rounded bg-zinc-800">
-                    {item.link.url_type}
-                  </span>
-                </div>
+              <div className="flex items-center gap-2 self-end sm:self-center flex-shrink-0">
+                <button
+                  onClick={() => handleCopy(item.link.code, item.shortUrl)}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-zinc-200 transition"
+                >
+                  {copiedCode === item.link.code ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Copied</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5" />
+                      <span>Copy</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  onClick={() => onOpenQr(item)}
+                  className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition"
+                  title="View QR Code"
+                >
+                  <QrCode className="w-4 h-4" />
+                </button>
+
+                <button
+                  onClick={() => onOpenAnalytics(item.link.code)}
+                  className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition"
+                  title="Live Analytics"
+                >
+                  <BarChart3 className="w-4 h-4" />
+                </button>
+
+                <a
+                  href={item.shortUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition"
+                  title="Test Link"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                </a>
               </div>
             </div>
-
-            {/* Right Actions */}
-            <div className="flex items-center gap-2 self-end sm:self-center flex-shrink-0">
-              <button
-                onClick={() => handleCopy(item.link.code, item.shortUrl)}
-                className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-zinc-200 transition"
-              >
-                {copiedCode === item.link.code ? (
-                  <>
-                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Copied</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5" />
-                    <span>Copy</span>
-                  </>
-                )}
-              </button>
-
-              <button
-                onClick={() => onOpenQr(item)}
-                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition"
-                title="View QR Code"
-              >
-                <QrCode className="w-4 h-4" />
-              </button>
-
-              <button
-                onClick={() => onOpenAnalytics(item.link.code)}
-                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition"
-                title="Live Analytics"
-              >
-                <BarChart3 className="w-4 h-4" />
-              </button>
-
-              <a
-                href={item.shortUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white transition"
-                title="Test Link"
-              >
-                <ExternalLink className="w-4 h-4" />
-              </a>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </section>
   );

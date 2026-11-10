@@ -1,33 +1,50 @@
-export type YouTubeUrlType = 'video' | 'shorts' | 'playlist' | 'channel' | 'live';
+export type Platform = 'youtube' | 'instagram' | 'facebook';
 
-export interface ParsedYouTubeInfo {
-  type: YouTubeUrlType;
+export type ContentType =
+  | 'video'
+  | 'shorts'
+  | 'playlist'
+  | 'channel'
+  | 'live'
+  | 'reel'
+  | 'post'
+  | 'profile';
+
+export interface ParsedLinkInfo {
+  platform: Platform;
+  type: ContentType;
+  contentId?: string;
   videoId?: string;
   playlistId?: string;
-  channelPath?: string; // e.g. '@mkbhd' or 'channel/UC...'
-  timestamp?: string; // e.g. '120s' or '120'
+  channelPath?: string;
+  timestamp?: string;
   params: Record<string, string>;
   cleanUrl: string;
   androidIntentUrl: string;
-  androidCustomSchemeUrl: string;
-  iosSchemeUrl: string;
+  androidCustomSchemeUrl?: string;
+  iosDeepLinkUrl: string;
+  iosPreferUniversalLink: boolean;
   webFallbackUrl: string;
 }
 
-export interface YouTubeMetadata {
+export interface PlatformMetadata {
+  platform: Platform;
   title: string;
   authorName: string;
   authorUrl?: string;
   thumbnailUrl: string;
-  type: YouTubeUrlType;
+  type: ContentType;
 }
 
 export interface LinkRecord {
   id: number;
   code: string;
+  platform: Platform;
   original_url: string;
-  clean_youtube_url: string;
-  url_type: YouTubeUrlType;
+  clean_url: string;
+  clean_youtube_url: string; // Kept for backward compatibility
+  url_type: ContentType;
+  content_id: string | null;
   video_id: string | null;
   playlist_id: string | null;
   channel_id: string | null;
@@ -42,11 +59,13 @@ export interface ClickRecord {
   id?: number;
   link_id: number;
   code: string;
+  platform: Platform;
   device_type: 'android' | 'ios' | 'desktop' | 'tablet' | 'other';
   os_name: string;
   browser_name: string;
   is_in_app_browser: number; // 0 or 1
   referrer: string;
+  country: string;
   user_agent: string;
   ip_hash?: string;
   created_at?: string;
@@ -63,12 +82,35 @@ export interface LinkStats {
   };
   inAppCount: number;
   referrers: Record<string, number>;
+  browsers: Record<string, number>;
+  countries: Record<string, number>;
   recentClicks: Array<{
+    platform: string;
     device_type: string;
     os_name: string;
     browser_name: string;
     is_in_app_browser: number;
     referrer: string;
+    country: string;
     created_at: string;
   }>;
+}
+
+export interface PlatformAnalyticsSummary {
+  totalLinks: number;
+  totalClicks: number;
+  byPlatform: {
+    youtube: { links: number; clicks: number };
+    instagram: { links: number; clicks: number };
+    facebook: { links: number; clicks: number };
+  };
+  devices: {
+    android: number;
+    ios: number;
+    desktop: number;
+    other: number;
+  };
+  topCountries: Record<string, number>;
+  topBrowsers: Record<string, number>;
+  topReferrers: Record<string, number>;
 }

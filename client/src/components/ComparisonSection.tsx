@@ -9,10 +9,10 @@ export const ComparisonSection: React.FC = () => {
           <span>Side-by-Side Comparison</span>
         </div>
         <h2 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
-          Why Standard YouTube Links Hurt Your Growth
+          Why Standard Social Links Hurt Your Growth
         </h2>
         <p className="mt-4 text-base text-zinc-400">
-          When you post a normal YouTube link on Instagram bio, TikTok, or WhatsApp, it traps viewers in a restricted in-app browser.
+          When you share normal YouTube, Instagram, or Facebook links on WhatsApp, Instagram, or Telegram, mobile viewers are often trapped in logged-out embedded browsers.
         </p>
       </div>
 
@@ -20,44 +20,44 @@ export const ComparisonSection: React.FC = () => {
         {/* Normal Link (Bad) */}
         <div className="relative rounded-2xl bg-zinc-950/80 border border-red-950/80 p-6 sm:p-8 flex flex-col justify-between overflow-hidden">
           <div className="absolute top-0 right-0 w-32 h-32 bg-red-600/5 blur-3xl rounded-full" />
-          
+
           <div>
             <div className="flex items-center justify-between mb-6">
               <span className="px-3 py-1 rounded-full bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-bold uppercase tracking-wider flex items-center gap-1.5">
                 <XCircle className="w-4 h-4 text-red-500" />
-                Normal YouTube Link
+                Normal Social Link
               </span>
               <TrendingDown className="w-5 h-5 text-red-400" />
             </div>
 
-            <h3 className="text-xl font-bold text-white mb-2">Trapped in In-App Browsers</h3>
+            <h3 className="text-xl font-bold text-white mb-2">Trapped in In-App WebViews</h3>
             <p className="text-sm text-zinc-400 mb-6">
-              Opens inside Instagram / TikTok / WhatsApp WebViews instead of the native app.
+              Opens inside embedded in-app browsers instead of the native YouTube, Instagram, or Facebook app.
             </p>
 
             <ul className="space-y-3.5 text-sm text-zinc-300">
               <li className="flex items-start gap-3">
                 <XCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
-                <span><strong>User is logged out:</strong> YouTube prompts them to sign in before liking or commenting.</span>
+                <span><strong>User is logged out:</strong> Viewers cannot like, follow, comment, or subscribe without signing in again.</span>
               </li>
               <li className="flex items-start gap-3">
                 <XCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
-                <span><strong>Lost subscriptions:</strong> Google blocks OAuth login inside embedded WebViews for security.</span>
+                <span><strong>OAuth blocks:</strong> Embedded WebViews block Google and social logins for security reasons.</span>
               </li>
               <li className="flex items-start gap-3">
                 <XCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
-                <span><strong>Inferior playback:</strong> Capped video quality, stuttering, and lacking native landscape gestures.</span>
+                <span><strong>Inferior playback:</strong> Lower video resolution and missing native app gestures for Reels and Shorts.</span>
               </li>
               <li className="flex items-start gap-3">
                 <XCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
-                <span><strong>75%+ audience drop-off:</strong> Viewers close the in-app browser without interacting.</span>
+                <span><strong>High audience drop-off:</strong> Visitors close the browser rather than typing their password.</span>
               </li>
             </ul>
           </div>
 
           <div className="mt-8 pt-4 border-t border-zinc-800/80 flex items-center gap-2 text-xs text-red-400/90 font-medium">
             <AlertTriangle className="w-4 h-4 text-red-500" />
-            <span>Result: Lost subscribers, lower retention, wasted traffic</span>
+            <span>Result: Lost followers, lower retention, wasted traffic</span>
           </div>
         </div>
 
@@ -75,34 +75,34 @@ export const ComparisonSection: React.FC = () => {
               <TrendingUp className="w-5 h-5 text-emerald-400" />
             </div>
 
-            <h3 className="text-xl font-bold text-white mb-2">Direct Native YouTube App</h3>
+            <h3 className="text-xl font-bold text-white mb-2">Direct Native App Routing</h3>
             <p className="text-sm text-zinc-400 mb-6">
-              Instantly triggers the YouTube app on iOS & Android using smart intent deep links.
+              Uses Android Intents, Android App Links, and iOS Universal Links wherever supported by the OS.
             </p>
 
             <ul className="space-y-3.5 text-sm text-zinc-200">
               <li className="flex items-start gap-3">
                 <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />
-                <span><strong>Instant 1-tap engagement:</strong> Viewers are already signed into their Google accounts.</span>
+                <span><strong>Seamless engagement:</strong> Viewers land directly in their logged-in YouTube, Instagram, or Facebook app.</span>
               </li>
               <li className="flex items-start gap-3">
                 <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />
-                <span><strong>Instant subscribe & like:</strong> No passwords, no 2FA hurdles, no sign-in popups.</span>
+                <span><strong>1-tap follow &amp; subscribe:</strong> Zero login prompts, zero friction.</span>
               </li>
               <li className="flex items-start gap-3">
                 <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />
-                <span><strong>Full 4K HDR playback:</strong> Runs in native YouTube player with background audio and recommendations.</span>
+                <span><strong>Native playback quality:</strong> Full HD/4K video, Shorts, and Reels player experience.</span>
               </li>
               <li className="flex items-start gap-3">
                 <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />
-                <span><strong>Guaranteed fallback:</strong> Automatically loads YouTube in web browser if app is not installed.</span>
+                <span><strong>Guaranteed browser fallback:</strong> Automatically opens cleanly in the web browser when the app is unavailable.</span>
               </li>
             </ul>
           </div>
 
           <div className="mt-8 pt-4 border-t border-zinc-800/80 flex items-center gap-2 text-xs text-emerald-400 font-semibold">
             <Sparkles className="w-4 h-4 text-emerald-400" />
-            <span>Result: Up to 3.5x higher subscriber conversion rate</span>
+            <span>Result: Higher conversion across YouTube, Instagram &amp; Facebook</span>
           </div>
         </div>
       </div>

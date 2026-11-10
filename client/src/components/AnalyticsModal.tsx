@@ -1,16 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  X, 
-  BarChart3, 
-  Smartphone, 
-  Monitor, 
-  RefreshCw, 
-  TrendingUp, 
-  ShieldAlert, 
-  Clock, 
-  Globe 
+import {
+  X,
+  BarChart3,
+  RefreshCw,
+  TrendingUp,
+  Clock,
+  Globe,
+  Compass,
+  MapPin,
 } from 'lucide-react';
-import { LinkStats } from '../types';
+import { LinkStats, Platform } from '../types';
+import { PlatformIcon, getPlatformMeta } from './PlatformIcon';
 
 interface AnalyticsModalProps {
   isOpen: boolean;
@@ -18,11 +18,7 @@ interface AnalyticsModalProps {
   code: string;
 }
 
-export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({
-  isOpen,
-  onClose,
-  code,
-}) => {
+export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({ isOpen, onClose, code }) => {
   const [stats, setStats] = useState<LinkStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -63,16 +59,18 @@ export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({
   const androidClicks = stats?.devices.android || 0;
   const iosClicks = stats?.devices.ios || 0;
   const desktopClicks = stats?.devices.desktop || 0;
-  const otherClicks = stats?.devices.other || 0;
 
   const androidPct = totalClicks > 0 ? Math.round((androidClicks / totalClicks) * 100) : 0;
   const iosPct = totalClicks > 0 ? Math.round((iosClicks / totalClicks) * 100) : 0;
   const desktopPct = totalClicks > 0 ? Math.round((desktopClicks / totalClicks) * 100) : 0;
 
+  const platform: Platform = stats?.link.platform || 'youtube';
+  const brandMeta = getPlatformMeta(platform);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-md animate-fadeIn overflow-y-auto">
-      <div 
-        className="relative w-full max-w-3xl rounded-2xl glass-card border border-zinc-700/80 p-5 sm:p-7 shadow-2xl text-left my-auto"
+      <div
+        className="relative w-full max-w-4xl rounded-2xl glass-card border border-zinc-700/80 p-5 sm:p-7 shadow-2xl text-left my-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -82,13 +80,23 @@ export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({
               <BarChart3 className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+              <h3 className="text-base sm:text-lg font-bold text-white flex flex-wrap items-center gap-2">
                 <span>Real-Time Link Analytics</span>
                 <span className="font-mono text-xs px-2 py-0.5 rounded bg-zinc-800 text-zinc-300">
                   /{code}
                 </span>
+                {stats && (
+                  <span
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${brandMeta.badgeClass}`}
+                  >
+                    <PlatformIcon platform={platform} className="w-3 h-3" />
+                    {brandMeta.label}
+                  </span>
+                )}
               </h3>
-              <p className="text-xs text-zinc-400">Live click metrics & device breakdowns</p>
+              <p className="text-xs text-zinc-400">
+                Privacy-respecting metrics: devices, browsers, referrers &amp; countries
+              </p>
             </div>
           </div>
 
@@ -122,7 +130,7 @@ export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({
             <p className="text-sm font-semibold">{error}</p>
           </div>
         ) : stats ? (
-          <div className="mt-5 space-y-6">
+          <div className="mt-5 space-y-5">
             {/* KPI Cards */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div className="p-4 rounded-xl bg-zinc-900/80 border border-zinc-800">
@@ -146,9 +154,9 @@ export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({
               </div>
 
               <div className="p-4 rounded-xl bg-zinc-900/80 border border-zinc-800">
-                <span className="text-xs text-zinc-400">In-App Traps Saved</span>
+                <span className="text-xs text-zinc-400">In-App WebViews</span>
                 <p className="text-2xl font-extrabold text-amber-400 mt-1">{stats.inAppCount}</p>
-                <span className="text-[10px] text-zinc-500 mt-1">IG/TikTok WebView</span>
+                <span className="text-[10px] text-zinc-500 mt-1">IG / FB WebViews</span>
               </div>
             </div>
 
@@ -159,19 +167,19 @@ export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({
               </h4>
 
               <div className="h-3 w-full bg-zinc-800 rounded-full overflow-hidden flex">
-                <div 
-                  style={{ width: `${androidPct}%` }} 
-                  className="bg-red-500 transition-all duration-500" 
+                <div
+                  style={{ width: `${androidPct}%` }}
+                  className="bg-red-500 transition-all duration-500"
                   title={`Android: ${androidClicks}`}
                 />
-                <div 
-                  style={{ width: `${iosPct}%` }} 
-                  className="bg-blue-500 transition-all duration-500" 
+                <div
+                  style={{ width: `${iosPct}%` }}
+                  className="bg-blue-500 transition-all duration-500"
                   title={`iOS: ${iosClicks}`}
                 />
-                <div 
-                  style={{ width: `${desktopPct}%` }} 
-                  className="bg-emerald-500 transition-all duration-500" 
+                <div
+                  style={{ width: `${desktopPct}%` }}
+                  className="bg-emerald-500 transition-all duration-500"
                   title={`Desktop: ${desktopClicks}`}
                 />
               </div>
@@ -192,22 +200,23 @@ export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({
               </div>
             </div>
 
-            {/* Referrers & Recent Clicks Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Referrers, Browsers & Countries Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {/* Top Referrers */}
               <div className="p-4 rounded-xl bg-zinc-900/70 border border-zinc-800">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-3 flex items-center gap-1.5">
                   <Globe className="w-3.5 h-3.5 text-red-400" />
-                  <span>Top Traffic Sources</span>
+                  <span>Referrers</span>
                 </h4>
-
-                {Object.keys(stats.referrers).length === 0 ? (
+                {Object.keys(stats.referrers || {}).length === 0 ? (
                   <p className="text-xs text-zinc-500">No referrers recorded yet.</p>
                 ) : (
                   <div className="space-y-2">
                     {Object.entries(stats.referrers).map(([ref, count]) => (
                       <div key={ref} className="flex items-center justify-between text-xs">
-                        <span className="text-zinc-300 font-medium truncate max-w-[200px]">{ref}</span>
+                        <span className="text-zinc-300 font-medium truncate max-w-[140px]">
+                          {ref}
+                        </span>
                         <span className="text-zinc-400 font-mono px-2 py-0.5 rounded bg-zinc-800">
                           {count}
                         </span>
@@ -217,36 +226,99 @@ export const AnalyticsModal: React.FC<AnalyticsModalProps> = ({
                 )}
               </div>
 
-              {/* Recent Clicks Stream */}
+              {/* Top Browsers */}
               <div className="p-4 rounded-xl bg-zinc-900/70 border border-zinc-800">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-3 flex items-center gap-1.5">
-                  <Clock className="w-3.5 h-3.5 text-blue-400" />
-                  <span>Recent Clicks</span>
+                  <Compass className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Browsers</span>
                 </h4>
-
-                {stats.recentClicks.length === 0 ? (
-                  <p className="text-xs text-zinc-500">No clicks yet. Share your link to see data!</p>
+                {Object.keys(stats.browsers || {}).length === 0 ? (
+                  <p className="text-xs text-zinc-500">No browser data yet.</p>
                 ) : (
-                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                    {stats.recentClicks.slice(0, 6).map((c, idx) => (
-                      <div key={idx} className="flex items-center justify-between text-[11px] p-1.5 rounded bg-zinc-950/60 border border-zinc-800/60">
-                        <div className="flex items-center gap-2">
-                          <span className={`px-1.5 py-0.5 rounded uppercase font-bold text-[9px] ${
-                            c.device_type === 'android' ? 'bg-red-500/10 text-red-400' :
-                            c.device_type === 'ios' ? 'bg-blue-500/10 text-blue-400' : 'bg-emerald-500/10 text-emerald-400'
-                          }`}>
-                            {c.device_type}
-                          </span>
-                          <span className="text-zinc-300">{c.os_name} &bull; {c.browser_name}</span>
-                        </div>
-                        <span className="text-zinc-500 font-mono text-[10px]">
-                          {c.created_at.split(' ')[1] || c.created_at}
+                  <div className="space-y-2">
+                    {Object.entries(stats.browsers).map(([browser, count]) => (
+                      <div key={browser} className="flex items-center justify-between text-xs">
+                        <span className="text-zinc-300 font-medium truncate max-w-[140px]">
+                          {browser}
+                        </span>
+                        <span className="text-zinc-400 font-mono px-2 py-0.5 rounded bg-zinc-800">
+                          {count}
                         </span>
                       </div>
                     ))}
                   </div>
                 )}
               </div>
+
+              {/* Countries */}
+              <div className="p-4 rounded-xl bg-zinc-900/70 border border-zinc-800">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-3 flex items-center gap-1.5">
+                  <MapPin className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Countries</span>
+                </h4>
+                {Object.keys(stats.countries || {}).length === 0 ? (
+                  <p className="text-xs text-zinc-500">No country data yet.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {Object.entries(stats.countries).map(([country, count]) => (
+                      <div key={country} className="flex items-center justify-between text-xs">
+                        <span className="text-zinc-300 font-medium truncate max-w-[140px]">
+                          {country}
+                        </span>
+                        <span className="text-zinc-400 font-mono px-2 py-0.5 rounded bg-zinc-800">
+                          {count}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Recent Clicks Stream */}
+            <div className="p-4 rounded-xl bg-zinc-900/70 border border-zinc-800">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400 mb-3 flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5 text-blue-400" />
+                <span>Recent Click Activity</span>
+              </h4>
+
+              {stats.recentClicks.length === 0 ? (
+                <p className="text-xs text-zinc-500">No clicks yet. Share your link to see live data!</p>
+              ) : (
+                <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
+                  {stats.recentClicks.slice(0, 8).map((c, idx) => (
+                    <div
+                      key={idx}
+                      className="flex flex-wrap items-center justify-between gap-2 text-[11px] p-2 rounded bg-zinc-950/60 border border-zinc-800/60"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`px-1.5 py-0.5 rounded uppercase font-bold text-[9px] ${
+                            c.device_type === 'android'
+                              ? 'bg-red-500/10 text-red-400'
+                              : c.device_type === 'ios'
+                              ? 'bg-blue-500/10 text-blue-400'
+                              : 'bg-emerald-500/10 text-emerald-400'
+                          }`}
+                        >
+                          {c.device_type}
+                        </span>
+                        <span className="text-zinc-300">
+                          {c.os_name} &bull; {c.browser_name}
+                        </span>
+                        {c.country && c.country !== 'Unknown' && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono">
+                            {c.country}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-zinc-500 font-mono text-[10px]">
+                        {c.referrer} &bull; {c.created_at.split(' ')[1] || c.created_at}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         ) : null}

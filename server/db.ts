@@ -1,33 +1,59 @@
 import { createClient, Client } from '@libsql/client';
 import fs from 'fs';
 import path from 'path';
-import { ClickRecord, LinkRecord, LinkStats, YouTubeUrlType } from './types.js';
+import {
+  ClickRecord,
+  ContentType,
+  LinkRecord,
+  LinkStats,
+  Platform,
+  PlatformAnalyticsSummary,
+} from './types.js';
 
 let client: Client | null = null;
 
-export async function initDb(): Promise<Client> {
-  if (client) return client;
+async function ensureColumn(
+  db: Client,
+  table: string,
+  column: string,
+  definition: string
+): Promise<void> {
+  const info = await db.execute(`PRAGMA table_info(${table});`);
+  const exists = info.rows.some((r: any) => String(r.name).toLowerCase() === column.toLowerCase());
+  if (!exists) {
+    console.log(`🔄 [Migration] Adding column "${column}" to table "${table}"`);
+    await db.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+  }
+}
 
-  const url = process.env.TURSO_DATABASE_URL || process.env.DATABASE_URL;
-  const authToken = process.env.TURSO_AUTH_TOKEN;
+export async function initDb(customDbPath?: string): Promise<Client> {
+  if (client && !customDbPath) return client;
 
-  if (url) {
+  const url = customDbPath ? `file:${customDbPath}` : (process.env.TURSO_DATABASE_URL || process.env.DATABASE_URL);
+  const authToken = customDbPath ? undefined : process.env.TURSO_AUTH_TOKEN;
+
+  let activeClient: Client;
+
+  if (url && !url.startsWith('file:')) {
     const masked = url.replace(/:\/\/.*@/, '://***@');
     console.log(`📡 [Database] Connecting to remote Turso database at: ${masked}`);
     try {
-      client = createClient({ url, authToken });
-      await client.execute('SELECT 1;');
+      activeClient = createClient({ url, authToken });
+      await activeClient.execute('SELECT 1;');
       console.log('✅ [Database] Remote database connection verified.');
     } catch (err: any) {
       console.error('❌ [Database] Connection error with remote database:', err.message);
-      client = null;
-      throw new Error(`Failed to connect to remote database: ${err.message}. Please verify TURSO_DATABASE_URL and TURSO_AUTH_TOKEN.`);
+      throw new Error(
+        `Failed to connect to remote database: ${err.message}. Please verify TURSO_DATABASE_URL and TURSO_AUTH_TOKEN.`
+      );
     }
+  } else if (url && url.startsWith('file:')) {
+    activeClient = createClient({ url });
   } else {
     const isVercel = Boolean(process.env.VERCEL);
     if (isVercel) {
       console.warn('⚠️ [Database] TURSO_DATABASE_URL not set in Vercel environment. Using in-memory fallback.');
-      client = createClient({ url: ':memory:' });
+      activeClient = createClient({ url: ':memory:' });
     } else {
       const dbDir = path.resolve(process.cwd(), 'data');
       if (!fs.existsSync(dbDir)) {
@@ -37,12 +63,12 @@ export async function initDb(): Promise<Client> {
       }
       const dbPath = path.join(dbDir, 'app.db');
       console.log(`📁 [Database] Using local SQLite file at: ${dbPath}`);
-      client = createClient({ url: `file:${dbPath}` });
+      activeClient = createClient({ url: `file:${dbPath}` });
     }
   }
 
-  // Schema creation
-  await client.execute(`
+  // Base schema creation (never drops or recreates existing tables)
+  await activeClient.execute(`
     CREATE TABLE IF NOT EXISTS links (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       code TEXT UNIQUE NOT NULL,
@@ -60,9 +86,9 @@ export async function initDb(): Promise<Client> {
     );
   `);
 
-  await client.execute(`CREATE INDEX IF NOT EXISTS idx_links_code ON links(code);`);
+  await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_links_code ON links(code);`);
 
-  await client.execute(`
+  await activeClient.execute(`
     CREATE TABLE IF NOT EXISTS clicks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       link_id INTEGER NOT NULL,
@@ -79,11 +105,23 @@ export async function initDb(): Promise<Client> {
     );
   `);
 
-  await client.execute(`CREATE INDEX IF NOT EXISTS idx_clicks_code ON clicks(code);`);
-  await client.execute(`CREATE INDEX IF NOT EXISTS idx_clicks_link_id ON clicks(link_id);`);
-  await client.execute(`CREATE INDEX IF NOT EXISTS idx_clicks_created ON clicks(created_at);`);
+  await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_clicks_code ON clicks(code);`);
+  await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_clicks_link_id ON clicks(link_id);`);
+  await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_clicks_created ON clicks(created_at);`);
 
-  return client;
+  // Non-destructive, idempotent migrations for multi-platform & advanced analytics
+  await ensureColumn(activeClient, 'links', 'platform', "TEXT DEFAULT 'youtube'");
+  await ensureColumn(activeClient, 'links', 'content_id', 'TEXT');
+  await ensureColumn(activeClient, 'clicks', 'platform', "TEXT DEFAULT 'youtube'");
+  await ensureColumn(activeClient, 'clicks', 'country', "TEXT DEFAULT 'Unknown'");
+
+  await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_links_platform ON links(platform);`);
+  await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_clicks_platform ON clicks(platform);`);
+
+  if (!customDbPath) {
+    client = activeClient;
+  }
+  return activeClient;
 }
 
 async function getDb(): Promise<Client> {
@@ -93,70 +131,25 @@ async function getDb(): Promise<Client> {
   return client;
 }
 
-export async function isCodeAvailable(code: string): Promise<boolean> {
-  const db = await getDb();
-  const res = await db.execute({
-    sql: 'SELECT id FROM links WHERE code = ? LIMIT 1',
-    args: [code],
-  });
-  return res.rows.length === 0;
-}
-
-export async function createLink(data: {
-  code: string;
-  originalUrl: string;
-  cleanUrl: string;
-  urlType: YouTubeUrlType;
-  videoId?: string;
-  playlistId?: string;
-  channelId?: string;
-  title: string;
-  authorName: string;
-  thumbnailUrl: string;
-}): Promise<LinkRecord> {
-  const db = await getDb();
-
-  await db.execute({
-    sql: `INSERT INTO links (
-      code, original_url, clean_youtube_url, url_type,
-      video_id, playlist_id, channel_id,
-      title, author_name, thumbnail_url, created_at, click_count
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), 0)`,
-    args: [
-      data.code,
-      data.originalUrl,
-      data.cleanUrl,
-      data.urlType,
-      data.videoId || null,
-      data.playlistId || null,
-      data.channelId || null,
-      data.title,
-      data.authorName,
-      data.thumbnailUrl,
-    ],
-  });
-
-  const link = await getLinkByCode(data.code);
-  if (!link) throw new Error('Failed to retrieve newly created link');
-  return link;
-}
-
-export async function getLinkByCode(code: string): Promise<LinkRecord | null> {
-  const db = await getDb();
-  const res = await db.execute({
-    sql: 'SELECT * FROM links WHERE code = ? LIMIT 1',
-    args: [code],
-  });
-
-  if (res.rows.length === 0) return null;
-  const row = res.rows[0] as any;
-
+function mapLinkRow(row: any): LinkRecord {
+  const cleanUrl = String(row.clean_youtube_url || '');
   return {
     id: Number(row.id),
     code: String(row.code),
+    platform: (row.platform as Platform) || 'youtube',
     original_url: String(row.original_url),
-    clean_youtube_url: String(row.clean_youtube_url),
-    url_type: row.url_type as YouTubeUrlType,
+    clean_url: cleanUrl,
+    clean_youtube_url: cleanUrl,
+    url_type: row.url_type as ContentType,
+    content_id: row.content_id
+      ? String(row.content_id)
+      : row.video_id
+      ? String(row.video_id)
+      : row.playlist_id
+      ? String(row.playlist_id)
+      : row.channel_id
+      ? String(row.channel_id)
+      : null,
     video_id: row.video_id ? String(row.video_id) : null,
     playlist_id: row.playlist_id ? String(row.playlist_id) : null,
     channel_id: row.channel_id ? String(row.channel_id) : null,
@@ -168,21 +161,89 @@ export async function getLinkByCode(code: string): Promise<LinkRecord | null> {
   };
 }
 
-export async function recordClick(click: ClickRecord): Promise<void> {
-  const db = await getDb();
+export async function isCodeAvailable(code: string, dbOverride?: Client): Promise<boolean> {
+  const db = dbOverride || (await getDb());
+  const res = await db.execute({
+    sql: 'SELECT id FROM links WHERE code = ? LIMIT 1',
+    args: [code],
+  });
+  return res.rows.length === 0;
+}
+
+export async function createLink(
+  data: {
+    code: string;
+    platform: Platform;
+    originalUrl: string;
+    cleanUrl: string;
+    urlType: ContentType;
+    contentId?: string;
+    videoId?: string;
+    playlistId?: string;
+    channelId?: string;
+    title: string;
+    authorName: string;
+    thumbnailUrl: string;
+  },
+  dbOverride?: Client
+): Promise<LinkRecord> {
+  const db = dbOverride || (await getDb());
+
+  await db.execute({
+    sql: `INSERT INTO links (
+      code, platform, original_url, clean_youtube_url, url_type,
+      content_id, video_id, playlist_id, channel_id,
+      title, author_name, thumbnail_url, created_at, click_count
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), 0)`,
+    args: [
+      data.code,
+      data.platform,
+      data.originalUrl,
+      data.cleanUrl,
+      data.urlType,
+      data.contentId || data.videoId || data.playlistId || data.channelId || null,
+      data.videoId || null,
+      data.playlistId || null,
+      data.channelId || null,
+      data.title,
+      data.authorName,
+      data.thumbnailUrl,
+    ],
+  });
+
+  const link = await getLinkByCode(data.code, db);
+  if (!link) throw new Error('Failed to retrieve newly created link');
+  return link;
+}
+
+export async function getLinkByCode(code: string, dbOverride?: Client): Promise<LinkRecord | null> {
+  const db = dbOverride || (await getDb());
+  const res = await db.execute({
+    sql: 'SELECT * FROM links WHERE code = ? LIMIT 1',
+    args: [code],
+  });
+
+  if (res.rows.length === 0) return null;
+  return mapLinkRow(res.rows[0]);
+}
+
+export async function recordClick(click: ClickRecord, dbOverride?: Client): Promise<void> {
+  const db = dbOverride || (await getDb());
   try {
     await db.execute({
       sql: `INSERT INTO clicks (
-        link_id, code, device_type, os_name, browser_name, is_in_app_browser, referrer, user_agent, ip_hash, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
+        link_id, code, platform, device_type, os_name, browser_name, is_in_app_browser, referrer, country, user_agent, ip_hash, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`,
       args: [
         click.link_id,
         click.code,
+        click.platform || 'youtube',
         click.device_type,
         click.os_name || 'Unknown',
         click.browser_name || 'Unknown',
         click.is_in_app_browser ? 1 : 0,
-        click.referrer || 'Direct / None',
+        click.referrer || 'Direct',
+        click.country || 'Unknown',
         click.user_agent || '',
         click.ip_hash || '',
       ],
@@ -197,9 +258,9 @@ export async function recordClick(click: ClickRecord): Promise<void> {
   }
 }
 
-export async function getLinkStats(code: string): Promise<LinkStats | null> {
-  const db = await getDb();
-  const link = await getLinkByCode(code);
+export async function getLinkStats(code: string, dbOverride?: Client): Promise<LinkStats | null> {
+  const db = dbOverride || (await getDb());
+  const link = await getLinkByCode(code, db);
   if (!link) return null;
 
   // Device counts
@@ -234,17 +295,39 @@ export async function getLinkStats(code: string): Promise<LinkStats | null> {
     referrers[String(r.referrer || 'Direct')] = Number(r.count || 0);
   }
 
+  // Top browsers
+  const browserRes = await db.execute({
+    sql: 'SELECT browser_name, COUNT(*) as count FROM clicks WHERE link_id = ? GROUP BY browser_name ORDER BY count DESC LIMIT 10',
+    args: [link.id],
+  });
+  const browsers: Record<string, number> = {};
+  for (const r of browserRes.rows) {
+    browsers[String(r.browser_name || 'Unknown')] = Number(r.count || 0);
+  }
+
+  // Top countries
+  const countryRes = await db.execute({
+    sql: 'SELECT country, COUNT(*) as count FROM clicks WHERE link_id = ? GROUP BY country ORDER BY count DESC LIMIT 10',
+    args: [link.id],
+  });
+  const countries: Record<string, number> = {};
+  for (const r of countryRes.rows) {
+    countries[String(r.country || 'Unknown')] = Number(r.count || 0);
+  }
+
   // Recent clicks
   const recentRes = await db.execute({
-    sql: 'SELECT device_type, os_name, browser_name, is_in_app_browser, referrer, created_at FROM clicks WHERE link_id = ? ORDER BY id DESC LIMIT 15',
+    sql: 'SELECT platform, device_type, os_name, browser_name, is_in_app_browser, referrer, country, created_at FROM clicks WHERE link_id = ? ORDER BY id DESC LIMIT 15',
     args: [link.id],
   });
   const recentClicks = recentRes.rows.map((r: any) => ({
+    platform: String(r.platform || link.platform || 'youtube'),
     device_type: String(r.device_type || 'other'),
     os_name: String(r.os_name || 'Unknown'),
     browser_name: String(r.browser_name || 'Unknown'),
     is_in_app_browser: Number(r.is_in_app_browser || 0),
     referrer: String(r.referrer || 'Direct'),
+    country: String(r.country || 'Unknown'),
     created_at: String(r.created_at || ''),
   }));
 
@@ -254,30 +337,90 @@ export async function getLinkStats(code: string): Promise<LinkStats | null> {
     devices,
     inAppCount,
     referrers,
+    browsers,
+    countries,
     recentClicks,
   };
 }
 
-export async function getRecentLinks(limit = 10): Promise<LinkRecord[]> {
-  const db = await getDb();
+export async function getPlatformAnalyticsSummary(dbOverride?: Client): Promise<PlatformAnalyticsSummary> {
+  const db = dbOverride || (await getDb());
+
+  const byPlatform = {
+    youtube: { links: 0, clicks: 0 },
+    instagram: { links: 0, clicks: 0 },
+    facebook: { links: 0, clicks: 0 },
+  };
+
+  const linksAgg = await db.execute(
+    `SELECT COALESCE(platform, 'youtube') as platform, COUNT(*) as link_count, COALESCE(SUM(click_count), 0) as total_clicks FROM links GROUP BY COALESCE(platform, 'youtube')`
+  );
+  let totalLinks = 0;
+  let totalClicks = 0;
+
+  for (const r of linksAgg.rows) {
+    const plat = String(r.platform || 'youtube').toLowerCase() as Platform;
+    const lc = Number(r.link_count || 0);
+    const cc = Number(r.total_clicks || 0);
+    totalLinks += lc;
+    totalClicks += cc;
+    if (plat === 'youtube' || plat === 'instagram' || plat === 'facebook') {
+      byPlatform[plat] = { links: lc, clicks: cc };
+    }
+  }
+
+  const devRes = await db.execute('SELECT device_type, COUNT(*) as count FROM clicks GROUP BY device_type');
+  const devices = { android: 0, ios: 0, desktop: 0, other: 0 };
+  for (const r of devRes.rows) {
+    const dev = String(r.device_type || 'other').toLowerCase();
+    const count = Number(r.count || 0);
+    if (dev === 'android') devices.android = count;
+    else if (dev === 'ios') devices.ios = count;
+    else if (dev === 'desktop') devices.desktop = count;
+    else devices.other += count;
+  }
+
+  const countryRes = await db.execute(
+    "SELECT COALESCE(country, 'Unknown') as country, COUNT(*) as count FROM clicks GROUP BY country ORDER BY count DESC LIMIT 10"
+  );
+  const topCountries: Record<string, number> = {};
+  for (const r of countryRes.rows) {
+    topCountries[String(r.country || 'Unknown')] = Number(r.count || 0);
+  }
+
+  const browserRes = await db.execute(
+    "SELECT COALESCE(browser_name, 'Unknown') as browser_name, COUNT(*) as count FROM clicks GROUP BY browser_name ORDER BY count DESC LIMIT 10"
+  );
+  const topBrowsers: Record<string, number> = {};
+  for (const r of browserRes.rows) {
+    topBrowsers[String(r.browser_name || 'Unknown')] = Number(r.count || 0);
+  }
+
+  const refRes = await db.execute(
+    "SELECT COALESCE(referrer, 'Direct') as referrer, COUNT(*) as count FROM clicks GROUP BY referrer ORDER BY count DESC LIMIT 10"
+  );
+  const topReferrers: Record<string, number> = {};
+  for (const r of refRes.rows) {
+    topReferrers[String(r.referrer || 'Direct')] = Number(r.count || 0);
+  }
+
+  return {
+    totalLinks,
+    totalClicks,
+    byPlatform,
+    devices,
+    topCountries,
+    topBrowsers,
+    topReferrers,
+  };
+}
+
+export async function getRecentLinks(limit = 10, dbOverride?: Client): Promise<LinkRecord[]> {
+  const db = dbOverride || (await getDb());
   const res = await db.execute({
     sql: 'SELECT * FROM links ORDER BY id DESC LIMIT ?',
     args: [limit],
   });
 
-  return res.rows.map((row: any) => ({
-    id: Number(row.id),
-    code: String(row.code),
-    original_url: String(row.original_url),
-    clean_youtube_url: String(row.clean_youtube_url),
-    url_type: row.url_type as YouTubeUrlType,
-    video_id: row.video_id ? String(row.video_id) : null,
-    playlist_id: row.playlist_id ? String(row.playlist_id) : null,
-    channel_id: row.channel_id ? String(row.channel_id) : null,
-    title: String(row.title),
-    author_name: String(row.author_name),
-    thumbnail_url: String(row.thumbnail_url),
-    created_at: String(row.created_at),
-    click_count: Number(row.click_count || 0),
-  }));
+  return res.rows.map(mapLinkRow);
 }

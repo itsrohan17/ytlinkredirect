@@ -1,25 +1,25 @@
 import React from 'react';
-import { ClipboardCheck, Cpu, Share2, ArrowRight } from 'lucide-react';
+import { ClipboardCheck, Cpu, Share2 } from 'lucide-react';
 
 export const HowItWorks: React.FC = () => {
   const steps = [
     {
       num: '01',
       icon: <ClipboardCheck className="w-6 h-6 text-red-500" />,
-      title: 'Paste Your YouTube URL',
-      desc: 'Paste any video, Shorts clip, channel handle, or playlist link. Customize your link alias or slug if you want a branded URL.',
+      title: 'Paste Any Supported URL',
+      desc: 'Paste a YouTube video, Shorts, playlist, or channel; an Instagram Reel, post, or profile; or a Facebook Reel, video, post, or page link.',
     },
     {
       num: '02',
-      icon: <Cpu className="w-6 h-6 text-rose-400" />,
-      title: 'Smart Deep Link Generated',
-      desc: 'Our engine extracts metadata, prepares Android Intent and iOS Universal URL schemes, and attaches rich OpenGraph preview cards.',
+      icon: <Cpu className="w-6 h-6 text-pink-400" />,
+      title: 'Platform Detection & Deep Link',
+      desc: 'Our engine automatically identifies the platform, preserves IDs & parameters, configures Android Intents and iOS Universal Links, and builds OpenGraph cards.',
     },
     {
       num: '03',
-      icon: <Share2 className="w-6 h-6 text-emerald-400" />,
-      title: 'Share Anywhere & Track',
-      desc: 'Post to Instagram bio, TikTok stories, WhatsApp chats, or Discord. Viewers jump straight into the native YouTube app with 1 tap.',
+      icon: <Share2 className="w-6 h-6 text-blue-400" />,
+      title: 'Share Anywhere & Track Analytics',
+      desc: 'Post to WhatsApp, Telegram, Instagram, Facebook, or Discord. Track clicks, devices, browsers, referrers, and countries in real time.',
     },
   ];
 
@@ -33,7 +33,7 @@ export const HowItWorks: React.FC = () => {
           How LinkTwin Works
         </h2>
         <p className="mt-4 text-base text-zinc-400">
-          Zero coding, no app installation required for your viewers, and 100% free forever.
+          Zero coding, no extra apps for your audience, and persistent links with safe browser fallback.
         </p>
       </div>
 
@@ -43,7 +43,6 @@ export const HowItWorks: React.FC = () => {
             key={idx}
             className="relative glass-card rounded-2xl p-6 sm:p-8 border border-zinc-800/80 hover:border-zinc-700 transition duration-300"
           >
-            {/* Step number badge */}
             <div className="flex items-center justify-between mb-6">
               <div className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center shadow-md">
                 {step.icon}

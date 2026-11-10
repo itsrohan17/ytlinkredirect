@@ -6,28 +6,28 @@ export const FaqSection: React.FC = () => {
 
   const faqs = [
     {
-      q: 'How does LinkTwin open the YouTube app directly on mobile devices?',
-      a: 'On Android devices, we use intent-based deep linking (intent://...#Intent;package=com.google.android.youtube...) which the Android OS detects to automatically launch the native YouTube application. On iOS (iPhone and iPad), we invoke the official youtube:// custom URI scheme and Universal Links. Both approaches bypass the restricted in-app browser WebView.',
+      q: 'Which platforms are supported by LinkTwin?',
+      a: 'LinkTwin exclusively supports YouTube (videos, Shorts, playlists, channels, live), Instagram (Reels, posts, profiles), and Facebook (Reels, Watch videos, posts, pages/profiles). All other unsupported domains are safely rejected.',
     },
     {
-      q: 'What happens if a user does not have the YouTube app installed?',
-      a: 'If the YouTube app is not found on their device, our smart redirection engine detects it and immediately falls back to loading the original video in their mobile browser (Safari, Chrome, Firefox). Viewers never see a broken page or dead end.',
+      q: 'How does mobile app redirection work on Android and iOS?',
+      a: 'On Android, we construct official intent:// App Links targeting YouTube, Instagram, or Facebook with a safe S.browser_fallback_url. On iOS, we use verified Universal Links and documented app URI schemes where supported. Because iOS and certain in-app WebViews restrict custom URL schemes (such as Instagram Reels shortcodes), we transparently rely on Universal Links and provide a 1-tap button plus a reliable browser fallback.',
     },
     {
-      q: 'Does it work when links are shared on WhatsApp, Instagram, and Telegram?',
-      a: 'Yes, 100%! When you share a LinkTwin link in WhatsApp, Telegram, or Discord, our server provides full OpenGraph metadata so the chat displays the video thumbnail, title, and channel name. When opened inside Instagram stories or bio, our specialized in-app handler guides the browser to launch the YouTube app directly.',
+      q: 'What happens if the native app is not installed?',
+      a: 'If the YouTube, Instagram, or Facebook app is unavailable, our smart fallback automatically directs the visitor to the canonical HTTPS web page in their mobile browser so no link ever breaks.',
     },
     {
-      q: 'Are the generated links permanent?',
-      a: 'Yes. All generated links are stored permanently in our indexed database. There are no expiration dates, no click limits, and no sudden paywalls.',
+      q: 'Will WhatsApp and Telegram show rich previews?',
+      a: 'Yes! When social bots and messaging crawlers (such as WhatsApp, Telegram, Discord, or X) request a short link, our server responds with full OpenGraph and App Links metadata so chat cards display thumbnails, titles, and creator details.',
     },
     {
-      q: 'Can I choose my own custom link slug?',
-      a: 'Yes! Simply toggle the "Customize link alias / slug" option before generating your link to create memorable custom URLs like yourdomain.com/my-music-video or /subscribe-here.',
+      q: 'What can I download in the Media Tools section?',
+      a: 'Media Tools strictly provides permitted public assets and official creator workflows: 1-click HD/SD YouTube thumbnail downloads, official embed HTML snippets, and step-by-step instructions for downloading your own content via YouTube Studio, Meta Accounts Center, and Meta Business Suite. We never bypass DRM, private accounts, or platform protections.',
     },
     {
-      q: 'Do I need to sign up or create an account?',
-      a: 'No login, no password, and no credit card required. LinkTwin is completely friction-free and ready to use immediately.',
+      q: 'Are existing YouTube short links and analytics preserved?',
+      a: 'Yes. All previously created YouTube short links, custom slugs, and historical analytics remain 100% intact and continue redirecting seamlessly.',
     },
   ];
 
@@ -46,7 +46,7 @@ export const FaqSection: React.FC = () => {
           Everything You Need to Know
         </h2>
         <p className="mt-4 text-base text-zinc-400">
-          Learn how smart deep links maximize creator engagement and channel growth.
+          Transparent answers about deep linking, platform policies, and analytics.
         </p>
       </div>
 
