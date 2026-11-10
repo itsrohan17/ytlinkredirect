@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Zap, Download } from 'lucide-react';
+import { Play, Zap, Download, Wrench } from 'lucide-react';
 import { PlatformIcon } from './PlatformIcon';
 
 interface NavbarProps {
@@ -50,6 +50,13 @@ export const Navbar: React.FC<NavbarProps> = ({ onScrollTo, recentCount }) => {
           >
             <Download className="w-3.5 h-3.5 text-emerald-400" />
             Media Studio
+          </button>
+          <button
+            onClick={() => onScrollTo('utilities-toolkit')}
+            className="hover:text-white transition-colors flex items-center gap-1.5"
+          >
+            <Wrench className="w-3.5 h-3.5 text-sky-400" />
+            Utilities
           </button>
           <button
             onClick={() => onScrollTo('comparison')}

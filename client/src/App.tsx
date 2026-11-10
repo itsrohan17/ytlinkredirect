@@ -4,6 +4,7 @@ import { Hero } from './components/Hero';
 import { UrlGenerator } from './components/UrlGenerator';
 import { ResultCard } from './components/ResultCard';
 import { MediaToolsSection } from './components/MediaToolsSection';
+import { UtilitiesSection } from './components/UtilitiesSection';
 import { ComparisonSection } from './components/ComparisonSection';
 import { HowItWorks } from './components/HowItWorks';
 import { SupportedFormats } from './components/SupportedFormats';
@@ -176,6 +177,8 @@ export const App: React.FC = () => {
         />
 
         <MediaToolsSection externalUrl={mediaInspectUrl} />
+
+        <UtilitiesSection />
 
         <ComparisonSection />
 

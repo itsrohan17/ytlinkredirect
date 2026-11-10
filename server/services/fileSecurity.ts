@@ -192,7 +192,8 @@ export async function resolveAndValidatePublicUrl(
 ): Promise<{ url: URL; resolvedIp: string; family: 4 | 6 }> {
   let urlString = (rawUrl || '').trim();
   if (!urlString) throw new Error('URL is required.');
-  if (!/^https?:\/\//i.test(urlString)) {
+  const hasExplicitScheme = /^[a-zA-Z][a-zA-Z0-9+-]*:(?:\/\/|[^\d])/i.test(urlString);
+  if (!hasExplicitScheme) {
     urlString = 'https://' + urlString;
   }
 
