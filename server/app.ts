@@ -16,6 +16,7 @@ import { linksRouter } from './routes/links.js';
 import { mediaRouter } from './routes/media.js';
 import { jobsRouter } from './routes/jobs.js';
 import { utilitiesRouter } from './routes/utilities.js';
+import { enforceSameOriginOnMutations, getAllowedOrigins } from './services/session.js';
 import { handleSmartRedirect } from './redirect.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -34,7 +35,18 @@ app.use(
   })
 );
 
-app.use(cors());
+// Restrictive same-origin CORS policy (never wildcard credentials with arbitrary third-party origins)
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (!origin) {
+    return next();
+  }
+  const allowed = getAllowedOrigins(req);
+  if (allowed.has(origin.toLowerCase())) {
+    return cors({ origin: true, credentials: true })(req, res, next);
+  }
+  return cors({ origin: false })(req, res, next);
+});
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -49,12 +61,21 @@ app.use((req, res, next) => {
   next();
 });
 
-// Rate limiting for write mutations (60 write requests per 15 minutes per IP)
+// Rate limiting: 60 write mutations / 15 min & 300 reads / 15 min per IP
 const linkCreateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 60,
-  skip: (req) => req.method === 'GET',
-  message: { error: 'Too many requests created from this IP. Please try again after 15 minutes.' },
+  skip: (req) => req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS',
+  message: { error: 'Too many write requests from this IP. Please try again after 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const apiReadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  skip: (req) => req.method !== 'GET',
+  message: { error: 'Too many read requests from this IP. Please slow down briefly.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -88,22 +109,19 @@ app.get('/api/health', (_req, res) => {
   res.status(200).json(buildHealthPayload());
 });
 
-// Mount utilitiesRouter on /api/utilities and /utilities
-app.use('/api/utilities', linkCreateLimiter, utilitiesRouter);
-app.use('/utilities', linkCreateLimiter, utilitiesRouter);
+// Enforce CSRF same-origin guard + read/write rate limits on all API routers
+app.use('/api/utilities', enforceSameOriginOnMutations, apiReadLimiter, linkCreateLimiter, utilitiesRouter);
+app.use('/utilities', enforceSameOriginOnMutations, apiReadLimiter, linkCreateLimiter, utilitiesRouter);
 
-// Mount jobsRouter on /api/jobs and /jobs
-app.use('/api/jobs', linkCreateLimiter, jobsRouter);
-app.use('/jobs', linkCreateLimiter, jobsRouter);
+app.use('/api/jobs', enforceSameOriginOnMutations, apiReadLimiter, linkCreateLimiter, jobsRouter);
+app.use('/jobs', enforceSameOriginOnMutations, apiReadLimiter, linkCreateLimiter, jobsRouter);
 
-// Mount mediaRouter on /api/media and /media
-app.use('/api/media', linkCreateLimiter, mediaRouter);
-app.use('/media', linkCreateLimiter, mediaRouter);
+app.use('/api/media', enforceSameOriginOnMutations, apiReadLimiter, linkCreateLimiter, mediaRouter);
+app.use('/media', enforceSameOriginOnMutations, apiReadLimiter, linkCreateLimiter, mediaRouter);
 
-// Mount linksRouter on both /api/links, /links, and /api
-app.use('/api/links', linkCreateLimiter, linksRouter);
-app.use('/links', linkCreateLimiter, linksRouter);
-app.use('/api', linksRouter);
+app.use('/api/links', enforceSameOriginOnMutations, apiReadLimiter, linkCreateLimiter, linksRouter);
+app.use('/links', enforceSameOriginOnMutations, apiReadLimiter, linkCreateLimiter, linksRouter);
+app.use('/api', enforceSameOriginOnMutations, apiReadLimiter, linksRouter);
 
 // Smart Redirect route: /:code
 app.get('/:code', async (req, res, next) => {
@@ -119,6 +137,7 @@ app.get('/:code', async (req, res, next) => {
     code === 'health' ||
     code === 'preview' ||
     code === 'analytics' ||
+    code === 'session' ||
     code === 'recent' ||
     code === 'links' ||
     code === 'media' ||

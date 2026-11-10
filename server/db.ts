@@ -169,6 +169,7 @@ export async function initDb(customDbPath?: string): Promise<Client> {
   `);
 
   await ensureColumn(activeClient, 'media_jobs', 'owner_token_hash', 'TEXT');
+  await ensureColumn(activeClient, 'media_jobs', 'session_token_hash', 'TEXT');
   await ensureColumn(activeClient, 'media_jobs', 'dedupe_key', 'TEXT');
   await ensureColumn(activeClient, 'media_jobs', 'retry_count', 'INTEGER DEFAULT 0');
   await ensureColumn(activeClient, 'media_jobs', 'max_retries', 'INTEGER DEFAULT 2');
@@ -177,6 +178,7 @@ export async function initDb(customDbPath?: string): Promise<Client> {
   await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_media_jobs_status ON media_jobs(status);`);
   await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_media_jobs_expires ON media_jobs(expires_at);`);
   await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_media_jobs_dedupe ON media_jobs(dedupe_key);`);
+  await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_media_jobs_session ON media_jobs(session_token_hash);`);
 
   if (!customDbPath || customDbPath === ':memory:') {
     client = activeClient;
@@ -430,7 +432,10 @@ export async function getLinkStats(code: string, dbOverride?: Client): Promise<L
   };
 }
 
-export async function getPlatformAnalyticsSummary(dbOverride?: Client): Promise<PlatformAnalyticsSummary> {
+export async function getPlatformAnalyticsSummary(
+  ownerTokenHash: string,
+  dbOverride?: Client
+): Promise<PlatformAnalyticsSummary> {
   const db = dbOverride || (await getDb());
 
   const byPlatform = {
@@ -439,9 +444,13 @@ export async function getPlatformAnalyticsSummary(dbOverride?: Client): Promise<
     facebook: { links: 0, clicks: 0 },
   };
 
-  const linksAgg = await db.execute(
-    `SELECT COALESCE(platform, 'youtube') as platform, COUNT(*) as link_count, COALESCE(SUM(click_count), 0) as total_clicks FROM links GROUP BY COALESCE(platform, 'youtube')`
-  );
+  const linksAgg = await db.execute({
+    sql: `SELECT COALESCE(platform, 'youtube') as platform, COUNT(*) as link_count, COALESCE(SUM(click_count), 0) as total_clicks
+          FROM links
+          WHERE owner_token_hash = ?
+          GROUP BY COALESCE(platform, 'youtube')`,
+    args: [ownerTokenHash],
+  });
   let totalLinks = 0;
   let totalClicks = 0;
 
@@ -456,7 +465,14 @@ export async function getPlatformAnalyticsSummary(dbOverride?: Client): Promise<
     }
   }
 
-  const devRes = await db.execute('SELECT device_type, COUNT(*) as count FROM clicks GROUP BY device_type');
+  const devRes = await db.execute({
+    sql: `SELECT c.device_type, COUNT(*) as count
+          FROM clicks c
+          INNER JOIN links l ON l.id = c.link_id
+          WHERE l.owner_token_hash = ?
+          GROUP BY c.device_type`,
+    args: [ownerTokenHash],
+  });
   const devices = { android: 0, ios: 0, desktop: 0, other: 0 };
   for (const r of devRes.rows) {
     const dev = String(r.device_type || 'other').toLowerCase();
@@ -467,25 +483,43 @@ export async function getPlatformAnalyticsSummary(dbOverride?: Client): Promise<
     else devices.other += count;
   }
 
-  const countryRes = await db.execute(
-    "SELECT COALESCE(country, 'Unknown') as country, COUNT(*) as count FROM clicks GROUP BY country ORDER BY count DESC LIMIT 10"
-  );
+  const countryRes = await db.execute({
+    sql: `SELECT COALESCE(c.country, 'Unknown') as country, COUNT(*) as count
+          FROM clicks c
+          INNER JOIN links l ON l.id = c.link_id
+          WHERE l.owner_token_hash = ?
+          GROUP BY c.country
+          ORDER BY count DESC LIMIT 10`,
+    args: [ownerTokenHash],
+  });
   const topCountries: Record<string, number> = {};
   for (const r of countryRes.rows) {
     topCountries[String(r.country || 'Unknown')] = Number(r.count || 0);
   }
 
-  const browserRes = await db.execute(
-    "SELECT COALESCE(browser_name, 'Unknown') as browser_name, COUNT(*) as count FROM clicks GROUP BY browser_name ORDER BY count DESC LIMIT 10"
-  );
+  const browserRes = await db.execute({
+    sql: `SELECT COALESCE(c.browser_name, 'Unknown') as browser_name, COUNT(*) as count
+          FROM clicks c
+          INNER JOIN links l ON l.id = c.link_id
+          WHERE l.owner_token_hash = ?
+          GROUP BY c.browser_name
+          ORDER BY count DESC LIMIT 10`,
+    args: [ownerTokenHash],
+  });
   const topBrowsers: Record<string, number> = {};
   for (const r of browserRes.rows) {
     topBrowsers[String(r.browser_name || 'Unknown')] = Number(r.count || 0);
   }
 
-  const refRes = await db.execute(
-    "SELECT COALESCE(referrer, 'Direct') as referrer, COUNT(*) as count FROM clicks GROUP BY referrer ORDER BY count DESC LIMIT 10"
-  );
+  const refRes = await db.execute({
+    sql: `SELECT COALESCE(c.referrer, 'Direct') as referrer, COUNT(*) as count
+          FROM clicks c
+          INNER JOIN links l ON l.id = c.link_id
+          WHERE l.owner_token_hash = ?
+          GROUP BY c.referrer
+          ORDER BY count DESC LIMIT 10`,
+    args: [ownerTokenHash],
+  });
   const topReferrers: Record<string, number> = {};
   for (const r of refRes.rows) {
     topReferrers[String(r.referrer || 'Direct')] = Number(r.count || 0);
@@ -508,10 +542,15 @@ export async function getRecentLinks(
   callerOwnerHash?: string | null
 ): Promise<LinkRecord[]> {
   const db = dbOverride || (await getDb());
-  const res = await db.execute({
-    sql: 'SELECT * FROM links ORDER BY id DESC LIMIT ?',
-    args: [limit],
-  });
+  const res = callerOwnerHash
+    ? await db.execute({
+        sql: 'SELECT * FROM links WHERE owner_token_hash = ? ORDER BY id DESC LIMIT ?',
+        args: [callerOwnerHash, limit],
+      })
+    : await db.execute({
+        sql: 'SELECT * FROM links ORDER BY id DESC LIMIT ?',
+        args: [limit],
+      });
 
   return res.rows.map((r) => mapLinkRow(r, callerOwnerHash));
 }
@@ -523,8 +562,8 @@ export async function listLinksPaginated(
     search?: string;
     platform?: string;
     sort?: string;
-    callerOwnerHash?: string | null;
-  } = {},
+    callerOwnerHash: string;
+  },
   dbOverride?: Client
 ): Promise<PaginatedLinksResult> {
   const db = dbOverride || (await getDb());
@@ -532,8 +571,9 @@ export async function listLinksPaginated(
   const limit = Math.min(50, Math.max(1, Number(options.limit || 12)));
   const offset = (page - 1) * limit;
 
-  const conditions: string[] = [];
-  const args: Array<string | number> = [];
+  // Strict owner isolation: always scope to callerOwnerHash
+  const conditions: string[] = ['owner_token_hash = ?'];
+  const args: Array<string | number> = [options.callerOwnerHash];
 
   const plat = (options.platform || 'all').toLowerCase();
   if (plat === 'youtube' || plat === 'instagram' || plat === 'facebook') {
@@ -655,11 +695,12 @@ export async function deleteLinkByCode(code: string, dbOverride?: Client): Promi
 
 export async function getGlobalAnalyticsDashboard(
   options: {
+    ownerTokenHash: string;
     range?: string;
     platform?: string;
     activityPage?: number;
     activityLimit?: number;
-  } = {},
+  },
   dbOverride?: Client
 ): Promise<GlobalAnalyticsDashboard> {
   const db = dbOverride || (await getDb());
@@ -673,8 +714,9 @@ export async function getGlobalAnalyticsDashboard(
   const platformFilter: 'all' | Platform =
     rawPlat === 'youtube' || rawPlat === 'instagram' || rawPlat === 'facebook' ? rawPlat : 'all';
 
-  const conditions: string[] = [];
-  const args: Array<string | number> = [];
+  // Strict owner isolation via INNER JOIN links
+  const conditions: string[] = ['l.owner_token_hash = ?'];
+  const args: Array<string | number> = [options.ownerTokenHash];
 
   if (range === '7d') conditions.push("c.created_at >= datetime('now', '-7 days')");
   else if (range === '30d') conditions.push("c.created_at >= datetime('now', '-30 days')");
@@ -685,13 +727,15 @@ export async function getGlobalAnalyticsDashboard(
     args.push(platformFilter);
   }
 
-  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const whereClause = `WHERE ${conditions.join(' AND ')}`;
 
   const totRes = await db.execute({
     sql: `SELECT
       COUNT(*) as total_clicks,
       SUM(CASE WHEN c.is_in_app_browser = 1 THEN 1 ELSE 0 END) as in_app_clicks
-    FROM clicks c ${whereClause}`,
+    FROM clicks c
+    INNER JOIN links l ON l.id = c.link_id
+    ${whereClause}`,
     args,
   });
   const totalClicksInRange = Number(totRes.rows[0]?.total_clicks || 0);
@@ -699,7 +743,11 @@ export async function getGlobalAnalyticsDashboard(
 
   // Platform breakdown within range
   const platRes = await db.execute({
-    sql: `SELECT LOWER(COALESCE(c.platform, 'youtube')) as plat, COUNT(*) as count FROM clicks c ${whereClause} GROUP BY plat`,
+    sql: `SELECT LOWER(COALESCE(c.platform, 'youtube')) as plat, COUNT(*) as count
+          FROM clicks c
+          INNER JOIN links l ON l.id = c.link_id
+          ${whereClause}
+          GROUP BY plat`,
     args,
   });
   const byPlatform = { youtube: 0, instagram: 0, facebook: 0 };
@@ -711,7 +759,11 @@ export async function getGlobalAnalyticsDashboard(
 
   // Devices within range
   const devRes = await db.execute({
-    sql: `SELECT LOWER(COALESCE(c.device_type, 'other')) as dev, COUNT(*) as count FROM clicks c ${whereClause} GROUP BY dev`,
+    sql: `SELECT LOWER(COALESCE(c.device_type, 'other')) as dev, COUNT(*) as count
+          FROM clicks c
+          INNER JOIN links l ON l.id = c.link_id
+          ${whereClause}
+          GROUP BY dev`,
     args,
   });
   const devices = { android: 0, ios: 0, desktop: 0, other: 0 };
@@ -726,7 +778,12 @@ export async function getGlobalAnalyticsDashboard(
 
   // Daily click trend
   const timeRes = await db.execute({
-    sql: `SELECT date(c.created_at) as day, COUNT(*) as clicks FROM clicks c ${whereClause} GROUP BY date(c.created_at) ORDER BY day ASC LIMIT 90`,
+    sql: `SELECT date(c.created_at) as day, COUNT(*) as clicks
+          FROM clicks c
+          INNER JOIN links l ON l.id = c.link_id
+          ${whereClause}
+          GROUP BY date(c.created_at)
+          ORDER BY day ASC LIMIT 90`,
     args,
   });
   const timeline = timeRes.rows
@@ -738,7 +795,12 @@ export async function getGlobalAnalyticsDashboard(
 
   // Geographic breakdown (never fabricate unknown locations)
   const geoRes = await db.execute({
-    sql: `SELECT COALESCE(NULLIF(TRIM(c.country), ''), 'Unknown') as country, COUNT(*) as count FROM clicks c ${whereClause} GROUP BY country ORDER BY count DESC LIMIT 12`,
+    sql: `SELECT COALESCE(NULLIF(TRIM(c.country), ''), 'Unknown') as country, COUNT(*) as count
+          FROM clicks c
+          INNER JOIN links l ON l.id = c.link_id
+          ${whereClause}
+          GROUP BY country
+          ORDER BY count DESC LIMIT 12`,
     args,
   });
   let knownGeoClicks = 0;
@@ -756,7 +818,12 @@ export async function getGlobalAnalyticsDashboard(
   }
 
   const browserRes = await db.execute({
-    sql: `SELECT COALESCE(NULLIF(TRIM(c.browser_name), ''), 'Unknown') as name, COUNT(*) as count FROM clicks c ${whereClause} GROUP BY name ORDER BY count DESC LIMIT 8`,
+    sql: `SELECT COALESCE(NULLIF(TRIM(c.browser_name), ''), 'Unknown') as name, COUNT(*) as count
+          FROM clicks c
+          INNER JOIN links l ON l.id = c.link_id
+          ${whereClause}
+          GROUP BY name
+          ORDER BY count DESC LIMIT 8`,
     args,
   });
   const topBrowsers = browserRes.rows.map((r) => ({
@@ -765,7 +832,12 @@ export async function getGlobalAnalyticsDashboard(
   }));
 
   const refRes = await db.execute({
-    sql: `SELECT COALESCE(NULLIF(TRIM(c.referrer), ''), 'Direct') as name, COUNT(*) as count FROM clicks c ${whereClause} GROUP BY name ORDER BY count DESC LIMIT 8`,
+    sql: `SELECT COALESCE(NULLIF(TRIM(c.referrer), ''), 'Direct') as name, COUNT(*) as count
+          FROM clicks c
+          INNER JOIN links l ON l.id = c.link_id
+          ${whereClause}
+          GROUP BY name
+          ORDER BY count DESC LIMIT 8`,
     args,
   });
   const topReferrers = refRes.rows.map((r) => ({
@@ -773,17 +845,20 @@ export async function getGlobalAnalyticsDashboard(
     clicks: Number(r.count || 0),
   }));
 
-  // Top links matching platform filter
-  const topLinkWhere =
-    platformFilter !== 'all' ? "WHERE LOWER(COALESCE(platform, 'youtube')) = ?" : '';
-  const topLinkArgs = platformFilter !== 'all' ? [platformFilter] : [];
+  // Top links owned by caller matching platform filter
+  const topLinkConds: string[] = ['owner_token_hash = ?'];
+  const topLinkArgs: Array<string> = [options.ownerTokenHash];
+  if (platformFilter !== 'all') {
+    topLinkConds.push("LOWER(COALESCE(platform, 'youtube')) = ?");
+    topLinkArgs.push(platformFilter);
+  }
   const topLinksRes = await db.execute({
-    sql: `SELECT * FROM links ${topLinkWhere} ORDER BY click_count DESC, id DESC LIMIT 5`,
+    sql: `SELECT * FROM links WHERE ${topLinkConds.join(' AND ')} ORDER BY click_count DESC, id DESC LIMIT 5`,
     args: topLinkArgs,
   });
-  const topLinks = topLinksRes.rows.map((r) => mapLinkRow(r));
+  const topLinks = topLinksRes.rows.map((r) => mapLinkRow(r, options.ownerTokenHash));
 
-  // Paginated recent click activity
+  // Paginated recent click activity (INNER JOIN links ensures strictly owner-scoped)
   const activityPage = Math.max(1, Number(options.activityPage || 1));
   const activityLimit = Math.min(30, Math.max(1, Number(options.activityLimit || 12)));
   const activityOffset = (activityPage - 1) * activityLimit;
@@ -801,7 +876,7 @@ export async function getGlobalAnalyticsDashboard(
       COALESCE(c.country, 'Unknown') as country,
       c.created_at
     FROM clicks c
-    LEFT JOIN links l ON l.id = c.link_id
+    INNER JOIN links l ON l.id = c.link_id
     ${whereClause}
     ORDER BY c.id DESC
     LIMIT ? OFFSET ?`,
@@ -875,6 +950,22 @@ function mapMediaJobRow(row: any): MediaJobRecord {
   };
 }
 
+export async function rotateOwnerSessionHash(
+  oldOwnerHash: string,
+  newOwnerHash: string,
+  dbOverride?: Client
+): Promise<void> {
+  const db = dbOverride || (await getDb());
+  await db.execute({
+    sql: 'UPDATE links SET owner_token_hash = ? WHERE owner_token_hash = ?',
+    args: [newOwnerHash, oldOwnerHash],
+  });
+  await db.execute({
+    sql: 'UPDATE media_jobs SET session_token_hash = ? WHERE session_token_hash = ?',
+    args: [newOwnerHash, oldOwnerHash],
+  });
+}
+
 export async function createMediaJob(
   data: {
     jobId: string;
@@ -889,6 +980,7 @@ export async function createMediaJob(
     storageKey?: string | null;
     outputStorageKey?: string | null;
     ownerTokenHash?: string | null;
+    sessionTokenHash?: string | null;
     dedupeKey?: string | null;
     maxRetries?: number;
     errorMessage?: string | null;
@@ -901,9 +993,9 @@ export async function createMediaJob(
     sql: `INSERT INTO media_jobs (
       job_id, module, processing_mode, input_filename, input_mime, input_size,
       output_format, output_size, status, storage_key, output_storage_key,
-      owner_token_hash, dedupe_key, retry_count, max_retries,
+      owner_token_hash, session_token_hash, dedupe_key, retry_count, max_retries,
       error_message, expires_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, datetime('now'), datetime('now'))`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, datetime('now'), datetime('now'))`,
     args: [
       data.jobId,
       data.module,
@@ -917,6 +1009,7 @@ export async function createMediaJob(
       data.storageKey ?? null,
       data.outputStorageKey ?? null,
       data.ownerTokenHash ?? null,
+      data.sessionTokenHash ?? null,
       data.dedupeKey ?? null,
       data.maxRetries ?? 2,
       data.errorMessage ?? null,
@@ -1034,12 +1127,21 @@ export async function getMediaJobById(jobId: string, dbOverride?: Client): Promi
   return mapMediaJobRow(res.rows[0]);
 }
 
-export async function getRecentMediaJobs(limit = 15, dbOverride?: Client): Promise<MediaJobRecord[]> {
+export async function getRecentMediaJobs(
+  limit = 15,
+  sessionTokenHash?: string,
+  dbOverride?: Client
+): Promise<MediaJobRecord[]> {
   const db = dbOverride || (await getDb());
-  const res = await db.execute({
-    sql: 'SELECT * FROM media_jobs ORDER BY id DESC LIMIT ?',
-    args: [limit],
-  });
+  const res = sessionTokenHash
+    ? await db.execute({
+        sql: 'SELECT * FROM media_jobs WHERE session_token_hash = ? ORDER BY id DESC LIMIT ?',
+        args: [sessionTokenHash, limit],
+      })
+    : await db.execute({
+        sql: 'SELECT * FROM media_jobs ORDER BY id DESC LIMIT ?',
+        args: [limit],
+      });
   return res.rows.map(mapMediaJobRow);
 }
 
@@ -1062,10 +1164,14 @@ export async function getExpiredMediaJobs(dbOverride?: Client): Promise<MediaJob
 
 export async function getStorageUsageSummary(
   objectStorageConfigured: boolean,
+  sessionTokenHash?: string,
   dbOverride?: Client
 ): Promise<StorageUsageSummary> {
   const db = dbOverride || (await getDb());
-  const res = await db.execute(`
+  const whereClause = sessionTokenHash ? 'WHERE session_token_hash = ?' : '';
+  const args = sessionTokenHash ? [sessionTokenHash] : [];
+  const res = await db.execute({
+    sql: `
     SELECT
       COUNT(*) as total_jobs,
       SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_jobs,
@@ -1074,7 +1180,10 @@ export async function getStorageUsageSummary(
       COALESCE(SUM(output_size), 0) as total_output_bytes,
       COALESCE(SUM(CASE WHEN status IN ('queued', 'processing', 'completed') AND (storage_key IS NOT NULL OR output_storage_key IS NOT NULL) THEN COALESCE(input_size, 0) + COALESCE(output_size, 0) ELSE 0 END), 0) as active_storage_bytes
     FROM media_jobs
-  `);
+    ${whereClause}
+  `,
+    args,
+  });
 
   const row = (res.rows[0] as any) || {};
   return {

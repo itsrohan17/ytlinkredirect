@@ -1,9 +1,18 @@
-import React, { useState, useEffect } from 'react';
-import { Video, Image as ImageIcon, LayoutTemplate, Music, Info } from 'lucide-react';
-import { VideoConverterTab } from './media/VideoConverterTab';
-import { ImageStudioTab } from './media/ImageStudioTab';
-import { ThumbnailStudioTab } from './media/ThumbnailStudioTab';
-import { AudioStudioTab } from './media/AudioStudioTab';
+import React, { useState, useEffect, Suspense } from 'react';
+import { Video, Image as ImageIcon, LayoutTemplate, Music, Info, Loader2 } from 'lucide-react';
+
+const VideoConverterTab = React.lazy(() =>
+  import('./media/VideoConverterTab').then((m) => ({ default: m.VideoConverterTab }))
+);
+const ImageStudioTab = React.lazy(() =>
+  import('./media/ImageStudioTab').then((m) => ({ default: m.ImageStudioTab }))
+);
+const ThumbnailStudioTab = React.lazy(() =>
+  import('./media/ThumbnailStudioTab').then((m) => ({ default: m.ThumbnailStudioTab }))
+);
+const AudioStudioTab = React.lazy(() =>
+  import('./media/AudioStudioTab').then((m) => ({ default: m.AudioStudioTab }))
+);
 
 interface MediaToolsSectionProps {
   externalUrl?: string;
@@ -99,10 +108,19 @@ export const MediaToolsSection: React.FC<MediaToolsSectionProps> = ({
         </div>
 
         {/* Active Module Workspace */}
-        {activeTab === 'video' && <VideoConverterTab />}
-        {activeTab === 'image' && <ImageStudioTab />}
-        {activeTab === 'thumbnail' && <ThumbnailStudioTab initialUrl={externalUrl} />}
-        {activeTab === 'audio' && <AudioStudioTab />}
+        <Suspense
+          fallback={
+            <div className="py-12 flex items-center justify-center gap-2 text-xs text-zinc-500">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Loading Media Studio module...
+            </div>
+          }
+        >
+          {activeTab === 'video' && <VideoConverterTab />}
+          {activeTab === 'image' && <ImageStudioTab />}
+          {activeTab === 'thumbnail' && <ThumbnailStudioTab initialUrl={externalUrl} />}
+          {activeTab === 'audio' && <AudioStudioTab />}
+        </Suspense>
       </div>
     </section>
   );

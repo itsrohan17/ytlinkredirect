@@ -1,8 +1,15 @@
-import React, { useState, useEffect } from 'react';
-import { QrCode, Eye, FileArchive } from 'lucide-react';
-import { QrCodeStudioTab } from './utilities/QrCodeStudioTab';
-import { SocialPreviewTesterTab } from './utilities/SocialPreviewTesterTab';
-import { FileCompressorTab } from './utilities/FileCompressorTab';
+import React, { useState, useEffect, Suspense } from 'react';
+import { QrCode, Eye, FileArchive, Loader2 } from 'lucide-react';
+
+const QrCodeStudioTab = React.lazy(() =>
+  import('./utilities/QrCodeStudioTab').then((m) => ({ default: m.QrCodeStudioTab }))
+);
+const SocialPreviewTesterTab = React.lazy(() =>
+  import('./utilities/SocialPreviewTesterTab').then((m) => ({ default: m.SocialPreviewTesterTab }))
+);
+const FileCompressorTab = React.lazy(() =>
+  import('./utilities/FileCompressorTab').then((m) => ({ default: m.FileCompressorTab }))
+);
 
 export type UtilityTab = 'qr' | 'preview' | 'compressor';
 
@@ -80,11 +87,20 @@ export const UtilitiesSection: React.FC<UtilitiesSectionProps> = ({
         </div>
 
         <div>
-          {activeTab === 'qr' && (
-            <QrCodeStudioTab defaultSize={defaultQrSize} defaultEcLevel={defaultQrEc} />
-          )}
-          {activeTab === 'preview' && <SocialPreviewTesterTab />}
-          {activeTab === 'compressor' && <FileCompressorTab />}
+          <Suspense
+            fallback={
+              <div className="py-12 flex items-center justify-center gap-2 text-xs text-zinc-500">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Loading utility module...
+              </div>
+            }
+          >
+            {activeTab === 'qr' && (
+              <QrCodeStudioTab defaultSize={defaultQrSize} defaultEcLevel={defaultQrEc} />
+            )}
+            {activeTab === 'preview' && <SocialPreviewTesterTab />}
+            {activeTab === 'compressor' && <FileCompressorTab />}
+          </Suspense>
         </div>
       </div>
     </section>

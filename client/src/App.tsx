@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, Suspense } from 'react';
 import {
   Menu,
   Sun,
@@ -11,17 +11,36 @@ import {
   Wrench,
   Settings,
   Check,
+  Loader2,
 } from 'lucide-react';
 import { DashboardSidebar } from './components/dashboard/DashboardSidebar';
 import { OverviewView } from './components/dashboard/OverviewView';
-import { SmartLinksView } from './components/dashboard/SmartLinksView';
-import { AnalyticsView } from './components/dashboard/AnalyticsView';
-import { SettingsView } from './components/dashboard/SettingsView';
-import { MediaToolsSection } from './components/MediaToolsSection';
-import { UtilitiesSection, UtilityTab } from './components/UtilitiesSection';
-import { QrCodeModal } from './components/QrCodeModal';
-import { DeviceSimulatorModal } from './components/DeviceSimulatorModal';
-import { AnalyticsModal } from './components/AnalyticsModal';
+import type { UtilityTab } from './components/UtilitiesSection';
+
+const SmartLinksView = React.lazy(() =>
+  import('./components/dashboard/SmartLinksView').then((m) => ({ default: m.SmartLinksView }))
+);
+const AnalyticsView = React.lazy(() =>
+  import('./components/dashboard/AnalyticsView').then((m) => ({ default: m.AnalyticsView }))
+);
+const SettingsView = React.lazy(() =>
+  import('./components/dashboard/SettingsView').then((m) => ({ default: m.SettingsView }))
+);
+const MediaToolsSection = React.lazy(() =>
+  import('./components/MediaToolsSection').then((m) => ({ default: m.MediaToolsSection }))
+);
+const UtilitiesSection = React.lazy(() =>
+  import('./components/UtilitiesSection').then((m) => ({ default: m.UtilitiesSection }))
+);
+const QrCodeModal = React.lazy(() =>
+  import('./components/QrCodeModal').then((m) => ({ default: m.QrCodeModal }))
+);
+const DeviceSimulatorModal = React.lazy(() =>
+  import('./components/DeviceSimulatorModal').then((m) => ({ default: m.DeviceSimulatorModal }))
+);
+const AnalyticsModal = React.lazy(() =>
+  import('./components/AnalyticsModal').then((m) => ({ default: m.AnalyticsModal }))
+);
 import {
   DashboardView,
   GeneratedLinkResult,
@@ -105,12 +124,15 @@ export const App: React.FC = () => {
     setDashboardLoading(true);
     setDashboardError(null);
     try {
+      // Ensure an isolated HttpOnly workspace session cookie exists before loading private data
+      await fetch('/api/links/session', { method: 'POST', credentials: 'same-origin' });
+
       const [sumRes, recRes, anaRes, jobsRes, healthRes] = await Promise.all([
-        fetch('/api/links/summary'),
-        fetch('/api/links/recent'),
-        fetch('/api/links/analytics?range=30d&activityLimit=5'),
-        fetch('/api/jobs/summary'),
-        fetch('/api/health'),
+        fetch('/api/links/summary', { credentials: 'same-origin' }),
+        fetch('/api/links/recent', { credentials: 'same-origin' }),
+        fetch('/api/links/analytics?range=30d&activityLimit=5', { credentials: 'same-origin' }),
+        fetch('/api/jobs/summary', { credentials: 'same-origin' }),
+        fetch('/api/health', { credentials: 'same-origin' }),
       ]);
 
       if (sumRes.ok) {
@@ -179,6 +201,22 @@ export const App: React.FC = () => {
     setHistory([]);
     localStorage.removeItem(STORAGE_KEY);
     showToast('Local quick history cleared');
+  };
+
+  const handleRotateSession = async () => {
+    try {
+      const res = await fetch('/api/links/session/rotate', {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      if (res.ok) {
+        showToast('Workspace session token rotated securely');
+        await loadDashboardData();
+        setRefreshSignal((s) => s + 1);
+      }
+    } catch {
+      showToast('Failed to rotate session key');
+    }
   };
 
   const handleLinkGenerated = (result: GeneratedLinkResult) => {
@@ -315,55 +353,65 @@ export const App: React.FC = () => {
             />
           )}
 
-          {activeView === 'links' && (
-            <SmartLinksView
-              compactTables={preferences.compactTables}
-              onOpenQr={openQrModal}
-              onOpenAnalyticsModal={(c) => openAnalyticsModal(c)}
-              onLinksMutated={() => {
-                loadDashboardData();
-                setRefreshSignal((s) => s + 1);
-              }}
-              refreshSignal={refreshSignal}
-            />
-          )}
+          <Suspense
+            fallback={
+              <div className="py-16 flex items-center justify-center gap-2 text-xs text-zinc-500">
+                <Loader2 className="w-5 h-5 animate-spin text-red-500" />
+                Loading workspace module...
+              </div>
+            }
+          >
+            {activeView === 'links' && (
+              <SmartLinksView
+                compactTables={preferences.compactTables}
+                onOpenQr={openQrModal}
+                onOpenAnalyticsModal={(c) => openAnalyticsModal(c)}
+                onLinksMutated={() => {
+                  loadDashboardData();
+                  setRefreshSignal((s) => s + 1);
+                }}
+                refreshSignal={refreshSignal}
+              />
+            )}
 
-          {activeView === 'analytics' && (
-            <AnalyticsView
-              compactTables={preferences.compactTables}
-              onOpenLinkAnalytics={(c) => openAnalyticsModal(c)}
-              refreshSignal={refreshSignal}
-            />
-          )}
+            {activeView === 'analytics' && (
+              <AnalyticsView
+                compactTables={preferences.compactTables}
+                onOpenLinkAnalytics={(c) => openAnalyticsModal(c)}
+                refreshSignal={refreshSignal}
+              />
+            )}
 
-          {activeView === 'media' && (
-            <MediaToolsSection
-              embedded
-              externalUrl={mediaInspectUrl}
-              objectStorageConfigured={health?.capabilities.objectStorageConfigured}
-              browserWasmMaxMb={health?.capabilities.limits.browserWasmMaxMb}
-            />
-          )}
+            {activeView === 'media' && (
+              <MediaToolsSection
+                embedded
+                externalUrl={mediaInspectUrl}
+                objectStorageConfigured={health?.capabilities.objectStorageConfigured}
+                browserWasmMaxMb={health?.capabilities.limits.browserWasmMaxMb}
+              />
+            )}
 
-          {activeView === 'utilities' && (
-            <UtilitiesSection
-              embedded
-              initialTab={utilityInitialTab}
-              defaultQrSize={preferences.defaultQrSize}
-              defaultQrEc={preferences.defaultQrEc}
-            />
-          )}
+            {activeView === 'utilities' && (
+              <UtilitiesSection
+                embedded
+                initialTab={utilityInitialTab}
+                defaultQrSize={preferences.defaultQrSize}
+                defaultQrEc={preferences.defaultQrEc}
+              />
+            )}
 
-          {activeView === 'settings' && (
-            <SettingsView
-              preferences={preferences}
-              onUpdatePreferences={handleUpdatePreferences}
-              onResetPreferences={handleResetPreferences}
-              onClearLocalHistory={handleClearHistory}
-              localHistoryCount={history.length}
-              health={health}
-            />
-          )}
+            {activeView === 'settings' && (
+              <SettingsView
+                preferences={preferences}
+                onUpdatePreferences={handleUpdatePreferences}
+                onResetPreferences={handleResetPreferences}
+                onClearLocalHistory={handleClearHistory}
+                onRotateSession={handleRotateSession}
+                localHistoryCount={history.length}
+                health={health}
+              />
+            )}
+          </Suspense>
         </main>
       </div>
 
@@ -411,25 +459,33 @@ export const App: React.FC = () => {
 
       {/* Existing Modals */}
       <div className="lt-adaptive-surface">
-        <QrCodeModal
-          isOpen={qrModalOpen}
-          onClose={() => setQrModalOpen(false)}
-          shortUrl={qrTargetResult?.shortUrl || ''}
-          title={qrTargetResult?.link.title || ''}
-          platform={qrTargetResult?.link.platform || 'youtube'}
-        />
+        <Suspense fallback={null}>
+          {qrModalOpen && (
+            <QrCodeModal
+              isOpen={qrModalOpen}
+              onClose={() => setQrModalOpen(false)}
+              shortUrl={qrTargetResult?.shortUrl || ''}
+              title={qrTargetResult?.link.title || ''}
+              platform={qrTargetResult?.link.platform || 'youtube'}
+            />
+          )}
 
-        <DeviceSimulatorModal
-          isOpen={simulatorOpen}
-          onClose={() => setSimulatorOpen(false)}
-          result={currentResult}
-        />
+          {simulatorOpen && (
+            <DeviceSimulatorModal
+              isOpen={simulatorOpen}
+              onClose={() => setSimulatorOpen(false)}
+              result={currentResult}
+            />
+          )}
 
-        <AnalyticsModal
-          isOpen={analyticsOpen}
-          onClose={() => setAnalyticsOpen(false)}
-          code={analyticsCode}
-        />
+          {analyticsOpen && (
+            <AnalyticsModal
+              isOpen={analyticsOpen}
+              onClose={() => setAnalyticsOpen(false)}
+              code={analyticsCode}
+            />
+          )}
+        </Suspense>
       </div>
     </div>
   );

@@ -11,22 +11,27 @@ async function runTests() {
     assert.ok(homeHtml.includes('LinkTwin'));
     console.log('[Pass 1] Frontend SPA served');
 
-    // Test 2: YouTube Video + Backward Compatibility
+    // Test 2: YouTube Video + Capture Workspace Session Cookie
     const ytRes = await fetch('http://localhost:3000/api/links', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' }),
     });
+    const setCookie = ytRes.headers.get('set-cookie') || '';
+    const sessionMatch = setCookie.match(/lt_session=([^;]+)/);
+    assert.ok(sessionMatch && sessionMatch[1], 'Expected lt_session cookie from POST /api/links');
+    const sessionCookie = `lt_session=${sessionMatch[1]}`;
+
     const ytData = await ytRes.json();
     assert.strictEqual(ytRes.status, 201);
     assert.strictEqual(ytData.link.platform, 'youtube');
     assert.strictEqual(ytData.link.url_type, 'video');
     console.log('[Pass 2] YouTube Video created:', ytData.link.code);
 
-    // Test 3: YouTube Shorts
+    // Test 3: YouTube Shorts (same session)
     const shortsRes = await fetch('http://localhost:3000/api/links', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Cookie: sessionCookie },
       body: JSON.stringify({ url: 'https://www.youtube.com/shorts/5-x1qKq2f1Q' }),
     });
     const shortsData = await shortsRes.json();
@@ -39,7 +44,7 @@ async function runTests() {
     // Test 4: Instagram Reel + Android Intent + iOS Universal Link
     const igRes = await fetch('http://localhost:3000/api/links', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Cookie: sessionCookie },
       body: JSON.stringify({ url: 'https://www.instagram.com/reel/C0xample123/' }),
     });
     const igData = await igRes.json();
@@ -53,7 +58,7 @@ async function runTests() {
     // Test 5: Facebook Reel / Watch Video
     const fbRes = await fetch('http://localhost:3000/api/links', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Cookie: sessionCookie },
       body: JSON.stringify({ url: 'https://www.facebook.com/watch/?v=10153231379946729' }),
     });
     const fbData = await fbRes.json();
@@ -120,15 +125,21 @@ async function runTests() {
 
     await new Promise((r) => setTimeout(r, 250));
 
-    // Test 10: Advanced Analytics (Devices, Browsers, Countries, Referrers) & Global Summary
-    const statsRes = await fetch('http://localhost:3000/api/links/' + igData.link.code + '/stats');
+    // Test 10: Owner-scoped Advanced Analytics & Global Summary
+    const statsRes = await fetch('http://localhost:3000/api/links/' + igData.link.code + '/stats', {
+      headers: { Cookie: sessionCookie },
+    });
     const statsData = await statsRes.json();
+    assert.strictEqual(statsRes.status, 200);
     assert.ok(statsData.stats.totalClicks >= 1);
     assert.strictEqual(statsData.stats.countries['IN'], 1);
     assert.ok(Object.keys(statsData.stats.browsers).length >= 1);
 
-    const summaryRes = await fetch('http://localhost:3000/api/links/summary');
+    const summaryRes = await fetch('http://localhost:3000/api/links/summary', {
+      headers: { Cookie: sessionCookie },
+    });
     const summaryData = await summaryRes.json();
+    assert.strictEqual(summaryRes.status, 200);
     assert.ok(summaryData.summary.byPlatform.youtube.links >= 1);
     assert.ok(summaryData.summary.byPlatform.instagram.links >= 1);
     assert.ok(summaryData.summary.byPlatform.facebook.links >= 1);

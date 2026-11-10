@@ -18,6 +18,7 @@ interface SettingsViewProps {
   onUpdatePreferences: (patch: Partial<UserPreferences>) => void;
   onResetPreferences: () => void;
   onClearLocalHistory: () => void;
+  onRotateSession: () => Promise<void>;
   localHistoryCount: number;
   health: ServerHealthStatus | null;
 }
@@ -27,6 +28,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onUpdatePreferences,
   onResetPreferences,
   onClearLocalHistory,
+  onRotateSession,
   localHistoryCount,
   health,
 }) => {
@@ -160,15 +162,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             Use compact row spacing in Smart Links &amp; Analytics tables
           </label>
 
-          <button
-            type="button"
-            onClick={onClearLocalHistory}
-            disabled={localHistoryCount === 0}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-300 border border-rose-500/25 text-xs font-medium disabled:opacity-40"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            Clear Local Quick History ({localHistoryCount})
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={onRotateSession}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-xs font-medium text-zinc-700 dark:text-zinc-200"
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+              Rotate Session Token
+            </button>
+
+            <button
+              type="button"
+              onClick={onClearLocalHistory}
+              disabled={localHistoryCount === 0}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-300 border border-rose-500/25 text-xs font-medium disabled:opacity-40"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Clear Local Quick History ({localHistoryCount})
+            </button>
+          </div>
         </div>
       </div>
 

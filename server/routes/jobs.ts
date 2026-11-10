@@ -27,6 +27,14 @@ import {
   verifyOwnerToken,
 } from '../services/storage.js';
 import { MediaJobRecord, MediaModule, ProcessingMode } from '../types.js';
+import {
+  extractSessionToken,
+  generateSessionToken,
+  getCallerSessionHash,
+  hashSessionToken,
+  isHttpsRequest,
+  setSessionCookie,
+} from '../services/session.js';
 import { runCleanupSweep } from '../../worker/mediaWorker.js';
 
 export const jobsRouter = Router();
@@ -88,12 +96,16 @@ jobsRouter.post('/validate-signature', (req: Request, res: Response) => {
   });
 });
 
-// GET /api/jobs/summary - Aggregate job & storage telemetry (non-sensitive)
-jobsRouter.get('/summary', async (_req: Request, res: Response) => {
+// GET /api/jobs/summary - Owner-scoped job & storage telemetry (requires valid workspace session)
+jobsRouter.get('/summary', async (req: Request, res: Response) => {
   try {
+    const callerSessionHash = getCallerSessionHash(req);
+    if (!callerSessionHash) {
+      return res.status(401).json({ error: 'Authentication session required to inspect media jobs.' });
+    }
     const objectConfigured = isObjectStorageConfigured();
-    const summary = await getStorageUsageSummary(objectConfigured);
-    const recent = (await getRecentMediaJobs(10)).map(sanitizeJobForClient);
+    const summary = await getStorageUsageSummary(objectConfigured, callerSessionHash);
+    const recent = (await getRecentMediaJobs(10, callerSessionHash)).map(sanitizeJobForClient);
     return res.json({
       success: true,
       summary,
@@ -197,6 +209,14 @@ jobsRouter.post('/', async (req: Request, res: Response) => {
       signedUploadUrl = createPresignedS3Url('PUT', storageKey, SIGNED_URL_TTL_SECONDS);
     }
 
+    let sessionToken = extractSessionToken(req);
+    let createdNewSession = false;
+    if (!sessionToken) {
+      sessionToken = generateSessionToken();
+      createdNewSession = true;
+    }
+    const sessionTokenHash = hashSessionToken(sessionToken);
+
     const record = await createMediaJob({
       jobId,
       module,
@@ -209,13 +229,17 @@ jobsRouter.post('/', async (req: Request, res: Response) => {
       status: mode === 'server-worker' ? 'queued' : 'completed',
       storageKey,
       ownerTokenHash,
+      sessionTokenHash,
       dedupeKey: dedupeKey ? String(dedupeKey).slice(0, 128) : null,
       maxRetries: Number(process.env.WORKER_MAX_RETRIES || 2),
       expiresAt: mode === 'server-worker' ? getExpirationIso() : null,
     });
 
-    const cookieFlags = `HttpOnly; SameSite=Lax; Path=/; Max-Age=86400${process.env.VERCEL ? '; Secure' : ''}`;
-    res.setHeader('Set-Cookie', `lt_job_${jobId}=${ownerToken}; ${cookieFlags}`);
+    const cookieFlags = `HttpOnly; SameSite=Lax; Path=/; Max-Age=86400${isHttpsRequest(req) ? '; Secure' : ''}`;
+    res.append('Set-Cookie', `lt_job_${jobId}=${ownerToken}; ${cookieFlags}`);
+    if (createdNewSession) {
+      setSessionCookie(req, res, sessionToken);
+    }
 
     return res.status(201).json({
       success: true,

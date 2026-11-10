@@ -61,7 +61,7 @@ async function runPhase5Tests() {
     const fbData: any = await createFb.json();
     const fbCode = fbData.link.code;
 
-    // Seed verified country click vs Unknown click on YT link
+    // Seed verified country click (recent) AND an older 45-day-old Unknown click on YT link to verify range filters
     await recordClick(
       {
         link_id: ytData.link.id,
@@ -77,27 +77,38 @@ async function runPhase5Tests() {
       },
       db
     );
+    await db.execute({
+      sql: `INSERT INTO clicks (link_id, code, platform, device_type, os_name, browser_name, is_in_app_browser, referrer, country, user_agent, created_at)
+            VALUES (?, ?, 'youtube', 'ios', 'iOS', 'Safari', 0, 'Direct', 'Unknown', 'Mozilla/5.0', datetime('now', '-45 days'))`,
+      args: [ytData.link.id, ytCode],
+    });
+    await db.execute({
+      sql: 'UPDATE links SET click_count = click_count + 1 WHERE id = ?',
+      args: [ytData.link.id],
+    });
     console.log('[Pass 1] Seeded database metrics & session cookie isolation verified');
 
-    // 2. Summary telemetry matches actual database counts (3 links total: 1 IG, 1 YT, 1 FB; 2 clicks)
-    const sumRes = await fetch(`${base}/api/links/summary`);
+    // 2. Owner-scoped Summary matches Session A DB records (2 links created in session A, 2 clicks; legacy IG link excluded!)
+    const sumRes = await fetch(`${base}/api/links/summary`, {
+      headers: { Cookie: sessionCookie },
+    });
     const sumJson: any = await sumRes.json();
     assert.strictEqual(sumRes.status, 200);
-    assert.strictEqual(sumJson.summary.totalLinks, 3);
+    assert.strictEqual(sumJson.summary.totalLinks, 2);
     assert.strictEqual(sumJson.summary.totalClicks, 2);
     assert.strictEqual(sumJson.summary.byPlatform.youtube.links, 1);
-    assert.strictEqual(sumJson.summary.byPlatform.instagram.links, 1);
+    assert.strictEqual(sumJson.summary.byPlatform.instagram.links, 0);
     assert.strictEqual(sumJson.summary.byPlatform.facebook.links, 1);
-    console.log('[Pass 2] Dashboard overview summary matches exact DB records');
+    console.log('[Pass 2] Dashboard overview summary strictly scoped to owner DB records');
 
-    // 3. Paginated Listing, Search, Filter, Sort & Ownership Flag Check
-    const listAll = await fetch(`${base}/api/links?page=1&limit=2`, {
+    // 3. Paginated Listing, Search, Filter, Sort & Strict Legacy Exclusion
+    const listAll = await fetch(`${base}/api/links?page=1&limit=1`, {
       headers: { Cookie: sessionCookie },
     });
     const listJson: any = await listAll.json();
     assert.strictEqual(listAll.status, 200);
-    assert.strictEqual(listJson.links.length, 2);
-    assert.strictEqual(listJson.pagination.total, 3);
+    assert.strictEqual(listJson.links.length, 1);
+    assert.strictEqual(listJson.pagination.total, 2);
     assert.strictEqual(listJson.pagination.totalPages, 2);
     assert.strictEqual(listJson.links[0].canManage, true);
 
@@ -112,18 +123,17 @@ async function runPhase5Tests() {
       headers: { Cookie: sessionCookie },
     });
     const legacyJson: any = await legacyCheck.json();
-    assert.strictEqual(legacyJson.links[0].code, 'legacy1');
-    assert.strictEqual(legacyJson.links[0].canManage, false, 'Legacy link must not be editable');
-    console.log('[Pass 3] Paginated listing, search, platform filtering & canManage flags verified');
+    assert.strictEqual(legacyJson.links.length, 0, 'Unowned legacy link must NOT appear in session dashboard');
+    console.log('[Pass 3] Owner-scoped paginated listing, search, filter & legacy exclusion verified');
 
     // 4. Edit & Delete Authorization + Short Code Redirect Preservation
-    // 4a. Unauthenticated or mismatched session rejected with 403
+    // 4a. Unauthenticated PATCH returns 401; legacy DELETE returns 403
     const unauthPatch = await fetch(`${base}/api/links/${ytCode}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: 'Hijacked Title' }),
     });
-    assert.strictEqual(unauthPatch.status, 403);
+    assert.strictEqual(unauthPatch.status, 401);
 
     const legacyDelete = await fetch(`${base}/api/links/legacy1`, {
       method: 'DELETE',
@@ -150,7 +160,7 @@ async function runPhase5Tests() {
     assert.strictEqual(editedJson.link.code, ytCode);
     assert.strictEqual(editedJson.link.title, 'Updated Creator Video Title');
 
-    // Existing redirect URL still resolves
+    // Existing redirect URL still resolves publicly without session cookie
     const redirectRes = await fetch(`${base}/${ytCode}`, { redirect: 'manual' });
     assert.strictEqual(redirectRes.status, 302);
 
@@ -160,12 +170,16 @@ async function runPhase5Tests() {
       headers: { Cookie: sessionCookie },
     });
     assert.strictEqual(delFb.status, 200);
-    const getDeleted = await fetch(`${base}/api/links/${fbCode}`);
+    const getDeleted = await fetch(`${base}/api/links/${fbCode}`, {
+      headers: { Cookie: sessionCookie },
+    });
     assert.strictEqual(getDeleted.status, 404);
-    console.log('[Pass 4] Edit/Delete authorization, redirect preservation & 403 guards verified');
+    console.log('[Pass 4] Edit/Delete authorization, redirect preservation & 401/403 guards verified');
 
     // 5. Aggregated Analytics Date-Range Filters & Honest Geo Telemetry
-    const ana7dRes = await fetch(`${base}/api/links/analytics?range=7d`);
+    const ana7dRes = await fetch(`${base}/api/links/analytics?range=7d`, {
+      headers: { Cookie: sessionCookie },
+    });
     const ana7d: any = await ana7dRes.json();
     assert.strictEqual(ana7dRes.status, 200);
     assert.strictEqual(ana7d.analytics.totalClicksInRange, 2); // 1 seeded US + 1 redirect check
@@ -173,10 +187,12 @@ async function runPhase5Tests() {
     assert.strictEqual(ana7d.analytics.geo.knownGeoClicks, 1);
     assert.strictEqual(ana7d.analytics.geo.unknownGeoClicks, 1);
 
-    const anaAllRes = await fetch(`${base}/api/links/analytics?range=all`);
+    const anaAllRes = await fetch(`${base}/api/links/analytics?range=all`, {
+      headers: { Cookie: sessionCookie },
+    });
     const anaAll: any = await anaAllRes.json();
-    assert.strictEqual(anaAll.analytics.totalClicksInRange, 3); // Includes 45-day-old legacy IG click
-    assert.strictEqual(anaAll.analytics.unknownGeoClicks ?? anaAll.analytics.geo.unknownGeoClicks, 2);
+    assert.strictEqual(anaAll.analytics.totalClicksInRange, 3); // Includes 45-day-old click on YT link, excludes legacy1
+    assert.strictEqual(anaAll.analytics.geo.unknownGeoClicks, 2);
     console.log('[Pass 5] SQL analytics aggregation, date-range filters & honest geo attribution verified');
 
     // 6. Server Capabilities Health Telemetry (Zero Secrets)
