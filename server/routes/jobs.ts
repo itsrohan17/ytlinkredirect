@@ -7,6 +7,7 @@ import {
   getRecentMediaJobs,
   getStorageUsageSummary,
   markMediaJobExpired,
+  upgradeCompatibleSessionHashes,
 } from '../db.js';
 import {
   isAllowedMimeForCategory,
@@ -28,9 +29,9 @@ import {
 } from '../services/storage.js';
 import { MediaJobRecord, MediaModule, ProcessingMode } from '../types.js';
 import {
-  extractSessionToken,
   generateSessionToken,
-  getCallerSessionHash,
+  getSessionLookupHashes,
+  handleSessionRouteError,
   hashSessionToken,
   isHttpsRequest,
   setSessionCookie,
@@ -99,10 +100,12 @@ jobsRouter.post('/validate-signature', (req: Request, res: Response) => {
 // GET /api/jobs/summary - Owner-scoped job & storage telemetry (requires valid workspace session)
 jobsRouter.get('/summary', async (req: Request, res: Response) => {
   try {
-    const callerSessionHash = getCallerSessionHash(req);
-    if (!callerSessionHash) {
+    const lookup = getSessionLookupHashes(req);
+    if (!lookup) {
       return res.status(401).json({ error: 'Authentication session required to inspect media jobs.' });
     }
+    await upgradeCompatibleSessionHashes(lookup.primaryHash, lookup.compatHashes);
+    const callerSessionHash = lookup.primaryHash;
     const objectConfigured = isObjectStorageConfigured();
     const summary = await getStorageUsageSummary(objectConfigured, callerSessionHash);
     const recent = (await getRecentMediaJobs(10, callerSessionHash)).map(sanitizeJobForClient);
@@ -118,8 +121,7 @@ jobsRouter.get('/summary', async (req: Request, res: Response) => {
       },
     });
   } catch (err) {
-    console.error('❌ [Jobs Summary Error]:', err);
-    return res.status(500).json({ error: 'Failed to load media jobs summary.' });
+    return handleSessionRouteError(res, err, 'Jobs Summary Error', 'Failed to load media jobs summary.');
   }
 });
 
@@ -209,13 +211,18 @@ jobsRouter.post('/', async (req: Request, res: Response) => {
       signedUploadUrl = createPresignedS3Url('PUT', storageKey, SIGNED_URL_TTL_SECONDS);
     }
 
-    let sessionToken = extractSessionToken(req);
+    let sessionToken = '';
     let createdNewSession = false;
-    if (!sessionToken) {
+    let sessionTokenHash: string;
+    const existingLookup = getSessionLookupHashes(req);
+    if (existingLookup) {
+      await upgradeCompatibleSessionHashes(existingLookup.primaryHash, existingLookup.compatHashes);
+      sessionTokenHash = existingLookup.primaryHash;
+    } else {
       sessionToken = generateSessionToken();
+      sessionTokenHash = hashSessionToken(sessionToken);
       createdNewSession = true;
     }
-    const sessionTokenHash = hashSessionToken(sessionToken);
 
     const record = await createMediaJob({
       jobId,
@@ -248,8 +255,7 @@ jobsRouter.post('/', async (req: Request, res: Response) => {
       signedUrlExpiresInSeconds: signedUploadUrl ? SIGNED_URL_TTL_SECONDS : null,
     });
   } catch (err: any) {
-    console.error('❌ [Create Media Job Error]:', err);
-    return res.status(500).json({ error: 'Failed to create media job.' });
+    return handleSessionRouteError(res, err, 'Create Media Job Error', 'Failed to create media job.');
   }
 });
 

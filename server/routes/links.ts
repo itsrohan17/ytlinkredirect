@@ -13,16 +13,26 @@ import {
   listLinksPaginated,
   rotateOwnerSessionHash,
   updateLinkByCode,
+  upgradeCompatibleSessionHashes,
 } from '../db.js';
 import { detectPlatform, fetchPlatformMetadata, parsePlatformUrl } from '../platforms/index.js';
 import {
   extractSessionToken,
   generateSessionToken,
-  getCallerSessionHash,
+  getSessionLookupHashes,
+  handleSessionRouteError,
   hashSessionToken,
+  requireSessionSigningSecret,
   safeEqualHash,
   setSessionCookie,
 } from '../services/session.js';
+
+async function resolveAuthorizedOwnerHash(req: Request): Promise<string | null> {
+  const lookup = getSessionLookupHashes(req);
+  if (!lookup) return null;
+  await upgradeCompatibleSessionHashes(lookup.primaryHash, lookup.compatHashes);
+  return lookup.primaryHash;
+}
 
 export const linksRouter = Router();
 
@@ -117,12 +127,16 @@ linksRouter.post('/', async (req: Request, res: Response) => {
     const parsed = parsePlatformUrl(trimmedUrl);
     const metadata = await fetchPlatformMetadata(parsed);
 
-    let sessionToken = extractSessionToken(req);
-    if (!sessionToken) {
-      sessionToken = generateSessionToken();
+    let ownerTokenHash: string;
+    const existingLookup = getSessionLookupHashes(req);
+    if (existingLookup) {
+      await upgradeCompatibleSessionHashes(existingLookup.primaryHash, existingLookup.compatHashes);
+      ownerTokenHash = existingLookup.primaryHash;
+    } else {
+      const sessionToken = generateSessionToken();
+      ownerTokenHash = hashSessionToken(sessionToken);
       setSessionCookie(req, res, sessionToken);
     }
-    const ownerTokenHash = hashSessionToken(sessionToken);
 
     const linkRecord = await createLink({
       code,
@@ -150,8 +164,12 @@ linksRouter.post('/', async (req: Request, res: Response) => {
       parsed,
     });
   } catch (err: any) {
-    console.error('Error generating smart link:', err);
-    return res.status(500).json({ error: 'Server error generating link. Please try again.' });
+    return handleSessionRouteError(
+      res,
+      err,
+      'Create Smart Link Error',
+      'Server error generating link. Please try again.'
+    );
   }
 });
 
@@ -182,35 +200,39 @@ linksRouter.get('/preview', async (req: Request, res: Response) => {
 
 // POST /api/links/session - Bootstrap an anonymous isolated HttpOnly workspace session
 linksRouter.post('/session', (req: Request, res: Response) => {
-  let token = extractSessionToken(req);
-  if (!token) {
-    token = generateSessionToken();
-    setSessionCookie(req, res, token);
+  try {
+    requireSessionSigningSecret();
+    let token = extractSessionToken(req);
+    if (!token) {
+      token = generateSessionToken();
+      setSessionCookie(req, res, token);
+    }
+    return res.json({ success: true, initialized: true });
+  } catch (err) {
+    return handleSessionRouteError(res, err, 'Session Bootstrap Error', 'Failed to initialize session.');
   }
-  return res.json({ success: true, initialized: true });
 });
 
-// POST /api/links/session/rotate - Rotate workspace session key and invalidate old cookie
+// POST /api/links/session/rotate - Atomically rotate workspace session key & migrate ownership
 linksRouter.post('/session/rotate', async (req: Request, res: Response) => {
   try {
-    const oldHash = getCallerSessionHash(req);
+    const oldLookup = getSessionLookupHashes(req);
     const newToken = generateSessionToken();
     const newHash = hashSessionToken(newToken);
-    if (oldHash) {
-      await rotateOwnerSessionHash(oldHash, newHash);
+    if (oldLookup) {
+      await rotateOwnerSessionHash([oldLookup.primaryHash, ...oldLookup.compatHashes], newHash);
     }
     setSessionCookie(req, res, newToken);
     return res.json({ success: true, rotated: true });
   } catch (err) {
-    console.error('❌ [Session Rotate Error]:', err);
-    return res.status(500).json({ error: 'Failed to rotate session key.' });
+    return handleSessionRouteError(res, err, 'Session Rotate Error', 'Failed to rotate session key.');
   }
 });
 
 // GET /api/links - Paginated Smart Links listing strictly scoped to caller session
 linksRouter.get('/', async (req: Request, res: Response) => {
   try {
-    const callerHash = getCallerSessionHash(req);
+    const callerHash = await resolveAuthorizedOwnerHash(req);
     if (!callerHash) {
       return res.status(401).json({
         error: 'Authentication session required to access dashboard links.',
@@ -226,15 +248,14 @@ linksRouter.get('/', async (req: Request, res: Response) => {
     });
     return res.json({ success: true, ...result });
   } catch (err) {
-    console.error('❌ [List Links Error]:', err);
-    return res.status(500).json({ error: 'Failed to load links.' });
+    return handleSessionRouteError(res, err, 'List Links Error', 'Failed to load links.');
   }
 });
 
 // GET /api/links/analytics - Owner-scoped aggregated analytics dashboard
 linksRouter.get('/analytics', async (req: Request, res: Response) => {
   try {
-    const callerHash = getCallerSessionHash(req);
+    const callerHash = await resolveAuthorizedOwnerHash(req);
     if (!callerHash) {
       return res.status(401).json({
         error: 'Authentication session required to access analytics.',
@@ -249,15 +270,14 @@ linksRouter.get('/analytics', async (req: Request, res: Response) => {
     });
     return res.json({ success: true, analytics });
   } catch (err) {
-    console.error('❌ [Global Analytics Error]:', err);
-    return res.status(500).json({ error: 'Failed to load analytics.' });
+    return handleSessionRouteError(res, err, 'Global Analytics Error', 'Failed to load analytics.');
   }
 });
 
 // GET /api/links/summary - Owner-scoped multi-platform analytics summary
 linksRouter.get('/summary', async (req: Request, res: Response) => {
   try {
-    const callerHash = getCallerSessionHash(req);
+    const callerHash = await resolveAuthorizedOwnerHash(req);
     if (!callerHash) {
       return res.status(401).json({
         error: 'Authentication session required to access dashboard summary.',
@@ -266,14 +286,19 @@ linksRouter.get('/summary', async (req: Request, res: Response) => {
     const summary = await getPlatformAnalyticsSummary(callerHash);
     return res.json({ success: true, summary });
   } catch (err) {
-    return res.status(500).json({ error: 'Failed to fetch platform analytics summary' });
+    return handleSessionRouteError(
+      res,
+      err,
+      'Analytics Summary Error',
+      'Failed to fetch platform analytics summary'
+    );
   }
 });
 
 // GET /api/links/recent - Owner-scoped recent links
 linksRouter.get('/recent', async (req: Request, res: Response) => {
   try {
-    const callerHash = getCallerSessionHash(req);
+    const callerHash = await resolveAuthorizedOwnerHash(req);
     if (!callerHash) {
       return res.status(401).json({
         error: 'Authentication session required to access recent links.',
@@ -282,7 +307,7 @@ linksRouter.get('/recent', async (req: Request, res: Response) => {
     const links = await getRecentLinks(12, undefined, callerHash);
     return res.json({ success: true, links });
   } catch (err) {
-    return res.status(500).json({ error: 'Failed to fetch recent links' });
+    return handleSessionRouteError(res, err, 'Recent Links Error', 'Failed to fetch recent links');
   }
 });
 
@@ -293,7 +318,7 @@ linksRouter.get('/:code', async (req: Request, res: Response, next: NextFunction
   }
   try {
     const code = String(req.params.code || '');
-    const callerHash = getCallerSessionHash(req);
+    const callerHash = await resolveAuthorizedOwnerHash(req);
     if (!callerHash) {
       return res.status(401).json({ error: 'Authentication session required.' });
     }
@@ -317,7 +342,7 @@ linksRouter.get('/:code', async (req: Request, res: Response, next: NextFunction
       shortUrl,
     });
   } catch (err) {
-    return res.status(500).json({ error: 'Server error' });
+    return handleSessionRouteError(res, err, 'Get Link Error', 'Server error');
   }
 });
 
@@ -325,7 +350,7 @@ linksRouter.get('/:code', async (req: Request, res: Response, next: NextFunction
 linksRouter.patch('/:code', async (req: Request, res: Response) => {
   try {
     const code = String(req.params.code || '');
-    const callerHash = getCallerSessionHash(req);
+    const callerHash = await resolveAuthorizedOwnerHash(req);
     if (!callerHash) {
       return res.status(401).json({ error: 'Authentication session required to edit links.' });
     }
@@ -376,8 +401,7 @@ linksRouter.patch('/:code', async (req: Request, res: Response) => {
     const updated = await updateLinkByCode(code, updates, undefined, callerHash);
     return res.json({ success: true, link: updated });
   } catch (err) {
-    console.error('❌ [Update Link Error]:', err);
-    return res.status(500).json({ error: 'Failed to update link.' });
+    return handleSessionRouteError(res, err, 'Update Link Error', 'Failed to update link.');
   }
 });
 
@@ -385,7 +409,7 @@ linksRouter.patch('/:code', async (req: Request, res: Response) => {
 linksRouter.delete('/:code', async (req: Request, res: Response) => {
   try {
     const code = String(req.params.code || '');
-    const callerHash = getCallerSessionHash(req);
+    const callerHash = await resolveAuthorizedOwnerHash(req);
     if (!callerHash) {
       return res.status(401).json({ error: 'Authentication session required to delete links.' });
     }
@@ -405,8 +429,7 @@ linksRouter.delete('/:code', async (req: Request, res: Response) => {
     }
     return res.json({ success: true, deletedCode: code });
   } catch (err) {
-    console.error('❌ [Delete Link Error]:', err);
-    return res.status(500).json({ error: 'Failed to delete link.' });
+    return handleSessionRouteError(res, err, 'Delete Link Error', 'Failed to delete link.');
   }
 });
 
@@ -414,7 +437,7 @@ linksRouter.delete('/:code', async (req: Request, res: Response) => {
 linksRouter.get('/:code/stats', async (req: Request, res: Response) => {
   try {
     const code = String(req.params.code || '');
-    const callerHash = getCallerSessionHash(req);
+    const callerHash = await resolveAuthorizedOwnerHash(req);
     if (!callerHash) {
       return res.status(401).json({ error: 'Authentication session required to view link stats.' });
     }
@@ -433,6 +456,6 @@ linksRouter.get('/:code/stats', async (req: Request, res: Response) => {
     }
     return res.json({ success: true, stats });
   } catch (err) {
-    return res.status(500).json({ error: 'Server error fetching stats' });
+    return handleSessionRouteError(res, err, 'Link Stats Error', 'Server error fetching stats');
   }
 });

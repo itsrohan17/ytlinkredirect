@@ -140,6 +140,7 @@ export async function initDb(customDbPath?: string): Promise<Client> {
   await ensureColumn(activeClient, 'clicks', 'country', "TEXT DEFAULT 'Unknown'");
 
   await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_links_platform ON links(platform);`);
+  await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_links_owner ON links(owner_token_hash);`);
   await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_clicks_platform ON clicks(platform);`);
 
   // Media Studio job metadata table (stores metadata & object storage references only, never binaries)
@@ -950,20 +951,51 @@ function mapMediaJobRow(row: any): MediaJobRecord {
   };
 }
 
+export async function upgradeCompatibleSessionHashes(
+  primaryHash: string,
+  compatHashes: string[],
+  dbOverride?: Client
+): Promise<void> {
+  if (!compatHashes || compatHashes.length === 0) return;
+  const db = dbOverride || (await getDb());
+  const placeholders = compatHashes.map(() => '?').join(', ');
+  await db.batch(
+    [
+      {
+        sql: `UPDATE links SET owner_token_hash = ? WHERE owner_token_hash IN (${placeholders})`,
+        args: [primaryHash, ...compatHashes],
+      },
+      {
+        sql: `UPDATE media_jobs SET session_token_hash = ? WHERE session_token_hash IN (${placeholders})`,
+        args: [primaryHash, ...compatHashes],
+      },
+    ],
+    'write'
+  );
+}
+
 export async function rotateOwnerSessionHash(
-  oldOwnerHash: string,
+  oldOwnerHashes: string | string[],
   newOwnerHash: string,
   dbOverride?: Client
 ): Promise<void> {
+  const candidates = (Array.isArray(oldOwnerHashes) ? oldOwnerHashes : [oldOwnerHashes]).filter(Boolean);
+  if (candidates.length === 0) return;
   const db = dbOverride || (await getDb());
-  await db.execute({
-    sql: 'UPDATE links SET owner_token_hash = ? WHERE owner_token_hash = ?',
-    args: [newOwnerHash, oldOwnerHash],
-  });
-  await db.execute({
-    sql: 'UPDATE media_jobs SET session_token_hash = ? WHERE session_token_hash = ?',
-    args: [newOwnerHash, oldOwnerHash],
-  });
+  const placeholders = candidates.map(() => '?').join(', ');
+  await db.batch(
+    [
+      {
+        sql: `UPDATE links SET owner_token_hash = ? WHERE owner_token_hash IN (${placeholders})`,
+        args: [newOwnerHash, ...candidates],
+      },
+      {
+        sql: `UPDATE media_jobs SET session_token_hash = ? WHERE session_token_hash IN (${placeholders})`,
+        args: [newOwnerHash, ...candidates],
+      },
+    ],
+    'write'
+  );
 }
 
 export async function createMediaJob(

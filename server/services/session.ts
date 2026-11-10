@@ -3,11 +3,63 @@ import { NextFunction, Request, Response } from 'express';
 
 export const SESSION_COOKIE_NAME = 'lt_session';
 export const SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60; // 7 days
+export const MIN_PRODUCTION_SECRET_LENGTH = 32;
 
 const TOKEN_FORMAT_REGEX = /^[a-f0-9]{48,64}$/;
+const LOCAL_DEV_ONLY_SESSION_KEY = 'linktwin-local-dev-only-session-key';
 
-function getSessionSigningKey(): string | null {
-  return process.env.SESSION_SECRET || process.env.TURSO_AUTH_TOKEN || null;
+let loggedDevSecretWarning = false;
+
+export class SessionConfigError extends Error {
+  status = 503;
+  constructor(message: string) {
+    super(message);
+    this.name = 'SessionConfigError';
+  }
+}
+
+export function handleSessionRouteError(
+  res: Response,
+  err: unknown,
+  logPrefix: string,
+  fallbackMessage: string
+) {
+  if (err instanceof SessionConfigError) {
+    console.error(`❌ [Configuration Error] ${err.message}`);
+    return res.status(err.status).json({ error: err.message });
+  }
+  console.error(`❌ [${logPrefix}]:`, err);
+  return res.status(500).json({ error: fallbackMessage });
+}
+
+export function isProductionSessionEnvironment(): boolean {
+  return Boolean(process.env.VERCEL || process.env.NODE_ENV === 'production');
+}
+
+export function isSessionSecretConfigured(): boolean {
+  const secret = (process.env.SESSION_SECRET || '').trim();
+  return secret.length >= MIN_PRODUCTION_SECRET_LENGTH;
+}
+
+export function requireSessionSigningSecret(): string {
+  const configured = (process.env.SESSION_SECRET || '').trim();
+  if (configured.length >= MIN_PRODUCTION_SECRET_LENGTH) {
+    return configured;
+  }
+
+  if (isProductionSessionEnvironment()) {
+    throw new SessionConfigError(
+      'Server configuration error: SESSION_SECRET must be configured with at least 32 characters in production.'
+    );
+  }
+
+  if (!loggedDevSecretWarning) {
+    loggedDevSecretWarning = true;
+    console.warn(
+      '⚠️ [Session] SESSION_SECRET not set. Using local development session key (not permitted in production).'
+    );
+  }
+  return configured || LOCAL_DEV_ONLY_SESSION_KEY;
 }
 
 export function generateSessionToken(): string {
@@ -15,12 +67,42 @@ export function generateSessionToken(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
+export function hashSessionTokenWithSecret(token: string, secret: string): string {
+  return crypto.createHmac('sha256', secret).update(`linktwin-session:${token}`).digest('hex');
+}
+
 export function hashSessionToken(token: string): string {
-  const secret = getSessionSigningKey();
-  if (secret) {
-    return crypto.createHmac('sha256', secret).update(`linktwin-session:${token}`).digest('hex');
+  const secret = requireSessionSigningSecret();
+  return hashSessionTokenWithSecret(token, secret);
+}
+
+/**
+ * Computes hashes accepted for backward compatibility with:
+ * - Optional `SESSION_SECRET_PREVIOUS` during key rotation
+ * - Legacy Phase 5 raw SHA-256 (`c69a452`)
+ * - Legacy Phase 5.1 domain-separated SHA-256 fallback
+ */
+export function getCompatibleLegacyHashes(token: string, primaryHash: string): string[] {
+  const candidates = new Set<string>();
+
+  const previousSecret = (process.env.SESSION_SECRET_PREVIOUS || '').trim();
+  if (previousSecret.length >= 16) {
+    candidates.add(hashSessionTokenWithSecret(token, previousSecret));
   }
-  return crypto.createHash('sha256').update(`linktwin-session:${token}`).digest('hex');
+
+  // Exact Phase 5 (commit c69a452) token hash
+  candidates.add(crypto.createHash('sha256').update(token).digest('hex'));
+
+  // Exact Phase 5.1 non-HMAC domain fallback hash
+  candidates.add(crypto.createHash('sha256').update(`linktwin-session:${token}`).digest('hex'));
+
+  candidates.delete(primaryHash);
+  return Array.from(candidates);
+}
+
+export interface SessionLookupHashes {
+  primaryHash: string;
+  compatHashes: string[];
 }
 
 export function extractSessionToken(req: Request): string {
@@ -39,6 +121,19 @@ export function extractSessionToken(req: Request): string {
   return '';
 }
 
+export function getSessionLookupHashes(req: Request): SessionLookupHashes | null {
+  const token = extractSessionToken(req);
+  if (!token) {
+    // Still enforce production SESSION_SECRET presence even on missing cookie?
+    // Wait: unauthenticated requests cleanly receive 401 when missing cookie, while
+    // authenticated/creating requests enforce requireSessionSigningSecret() -> 503 if misconfigured.
+    return null;
+  }
+  const primaryHash = hashSessionToken(token);
+  const compatHashes = getCompatibleLegacyHashes(token, primaryHash);
+  return { primaryHash, compatHashes };
+}
+
 export function getCallerSessionHash(req: Request): string | null {
   const token = extractSessionToken(req);
   if (!token) return null;
@@ -51,6 +146,15 @@ export function safeEqualHash(a: string | null | undefined, b: string | null | u
   const bufB = Buffer.from(b, 'utf8');
   if (bufA.length !== bufB.length) return false;
   return crypto.timingSafeEqual(bufA, bufB);
+}
+
+export function isHashAuthorizedForSession(
+  storedHash: string | null | undefined,
+  lookup: SessionLookupHashes
+): boolean {
+  if (!storedHash) return false;
+  if (safeEqualHash(storedHash, lookup.primaryHash)) return true;
+  return lookup.compatHashes.some((h) => safeEqualHash(storedHash, h));
 }
 
 export function isHttpsRequest(req: Request): boolean {

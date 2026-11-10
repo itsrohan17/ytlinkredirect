@@ -16,7 +16,11 @@ import { linksRouter } from './routes/links.js';
 import { mediaRouter } from './routes/media.js';
 import { jobsRouter } from './routes/jobs.js';
 import { utilitiesRouter } from './routes/utilities.js';
-import { enforceSameOriginOnMutations, getAllowedOrigins } from './services/session.js';
+import {
+  enforceSameOriginOnMutations,
+  getAllowedOrigins,
+  isSessionSecretConfigured,
+} from './services/session.js';
 import { handleSmartRedirect } from './redirect.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -88,6 +92,7 @@ function buildHealthPayload() {
     environment: process.env.VERCEL ? 'vercel' : 'node',
     capabilities: {
       databaseMode: getDatabaseMode(),
+      sessionConfigured: isSessionSecretConfigured(),
       objectStorageConfigured,
       workerQueueSupported: objectStorageConfigured,
       limits: {
