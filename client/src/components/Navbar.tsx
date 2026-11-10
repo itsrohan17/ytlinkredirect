@@ -49,7 +49,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onScrollTo, recentCount }) => {
             className="hover:text-white transition-colors flex items-center gap-1.5"
           >
             <Download className="w-3.5 h-3.5 text-emerald-400" />
-            Media Tools
+            Media Studio
           </button>
           <button
             onClick={() => onScrollTo('comparison')}

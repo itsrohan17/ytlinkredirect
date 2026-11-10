@@ -1,4 +1,6 @@
 import dns from 'dns/promises';
+import http from 'http';
+import https from 'https';
 import net from 'net';
 
 const ALLOWED_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/gif']);
@@ -131,30 +133,63 @@ export function verifyMagicBytes(
 
 function isPrivateOrReservedIp(ip: string): boolean {
   if (!ip) return true;
-  if (ip === '::1' || ip === '::' || ip.startsWith('fe80:') || ip.startsWith('fc') || ip.startsWith('fd')) {
+  const lower = ip.toLowerCase().trim();
+
+  // Strip IPv6 zone index if present
+  const cleanIp = lower.split('%')[0];
+
+  if (cleanIp === '::1' || cleanIp === '::' || cleanIp === '0:0:0:0:0:0:0:1' || cleanIp === '0:0:0:0:0:0:0:0') {
     return true;
   }
-  if (ip.startsWith('::ffff:')) {
-    return isPrivateOrReservedIp(ip.slice(7));
+
+  // IPv6 ULA (fc00::/7), link-local (fe80::/10), multicast (ff00::/8)
+  if (
+    cleanIp.startsWith('fc') ||
+    cleanIp.startsWith('fd') ||
+    cleanIp.startsWith('fe8') ||
+    cleanIp.startsWith('fe9') ||
+    cleanIp.startsWith('fea') ||
+    cleanIp.startsWith('feb') ||
+    cleanIp.startsWith('ff')
+  ) {
+    return true;
   }
-  if (net.isIPv4(ip)) {
-    const parts = ip.split('.').map(Number);
+
+  // IPv4-mapped IPv6 dotted form ::ffff:127.0.0.1
+  if (cleanIp.startsWith('::ffff:')) {
+    const mapped = cleanIp.slice(7);
+    if (net.isIPv4(mapped)) {
+      return isPrivateOrReservedIp(mapped);
+    }
+    // Hex form e.g. ::ffff:7f00:1
+    const hexMatch = mapped.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (hexMatch) {
+      const hi = parseInt(hexMatch[1], 16);
+      const lo = parseInt(hexMatch[2], 16);
+      const ipv4 = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+      return isPrivateOrReservedIp(ipv4);
+    }
+    return true;
+  }
+
+  if (net.isIPv4(cleanIp)) {
+    const parts = cleanIp.split('.').map(Number);
     if (parts.length !== 4) return true;
     const [a, b] = parts;
     if (a === 0 || a === 10 || a === 127) return true; // 0.0.0.0/8, 10.0.0.0/8, 127.0.0.0/8
+    if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 CGNAT
     if (a === 169 && b === 254) return true; // 169.254.0.0/16 cloud metadata
     if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
     if (a === 192 && b === 168) return true; // 192.168.0.0/16
+    if (a === 198 && (b === 18 || b === 19)) return true; // 198.18.0.0/15 benchmark
     if (a >= 224) return true; // multicast & reserved
   }
   return false;
 }
 
-/**
- * SSRF-hardened URL validation: checks protocol, hostname literals, and resolves DNS
- * to guarantee no private network, loopback, or cloud metadata address can be accessed.
- */
-export async function validatePublicUrlForFetch(rawUrl: string): Promise<URL> {
+export async function resolveAndValidatePublicUrl(
+  rawUrl: string
+): Promise<{ url: URL; resolvedIp: string; family: 4 | 6 }> {
   let urlString = (rawUrl || '').trim();
   if (!urlString) throw new Error('URL is required.');
   if (!/^https?:\/\//i.test(urlString)) {
@@ -172,7 +207,10 @@ export async function validatePublicUrlForFetch(rawUrl: string): Promise<URL> {
     throw new Error('Only HTTP and HTTPS protocols are permitted.');
   }
 
-  const host = parsed.hostname.toLowerCase();
+  // Strip IPv6 brackets if literal
+  const rawHost = parsed.hostname.toLowerCase();
+  const host = rawHost.startsWith('[') && rawHost.endsWith(']') ? rawHost.slice(1, -1) : rawHost;
+
   if (
     host === 'localhost' ||
     host.endsWith('.local') ||
@@ -182,11 +220,12 @@ export async function validatePublicUrlForFetch(rawUrl: string): Promise<URL> {
     throw new Error('Access to internal or local hostnames is prohibited.');
   }
 
-  if (net.isIP(host)) {
+  const literalFamily = net.isIP(host);
+  if (literalFamily) {
     if (isPrivateOrReservedIp(host)) {
       throw new Error('Access to private or reserved IP addresses is prohibited.');
     }
-    return parsed;
+    return { url: parsed, resolvedIp: host, family: literalFamily as 4 | 6 };
   }
 
   try {
@@ -199,21 +238,97 @@ export async function validatePublicUrlForFetch(rawUrl: string): Promise<URL> {
         throw new Error('Target hostname resolves to a restricted private IP address.');
       }
     }
+    return {
+      url: parsed,
+      resolvedIp: records[0].address,
+      family: (records[0].family === 6 ? 6 : 4) as 4 | 6,
+    };
   } catch (err: any) {
     if (err.message?.includes('restricted') || err.message?.includes('prohibited')) {
       throw err;
     }
     throw new Error(`DNS resolution failed for ${host}`);
   }
-
-  return parsed;
 }
 
 /**
- * Performs an SSRF-safe HTTP/HTTPS GET fetch:
- * - Validates initial URL and DNS resolution.
- * - Uses redirect: 'manual' and re-validates every redirect Location via validatePublicUrlForFetch.
- * - Enforces request timeout and maximum response size limit.
+ * SSRF-hardened URL validation: checks protocol, hostname literals, and resolves DNS
+ * to guarantee no private network, loopback, or cloud metadata address can be accessed.
+ */
+export async function validatePublicUrlForFetch(rawUrl: string): Promise<URL> {
+  const { url } = await resolveAndValidatePublicUrl(rawUrl);
+  return url;
+}
+
+function pinnedRequest(
+  target: { url: URL; resolvedIp: string; family: 4 | 6 },
+  headers: Record<string, string>,
+  timeoutMs: number,
+  maxBytes: number
+): Promise<{ status: number; headers: http.IncomingHttpHeaders; bodyBuffer: Buffer }> {
+  return new Promise((resolve, reject) => {
+    const isHttps = target.url.protocol === 'https:';
+    const lib = isHttps ? https : http;
+    const defaultPort = isHttps ? 443 : 80;
+    const port = target.url.port ? Number(target.url.port) : defaultPort;
+    const pathAndQuery = `${target.url.pathname}${target.url.search}`;
+
+    const reqOptions: https.RequestOptions = {
+      host: target.resolvedIp,
+      port,
+      family: target.family,
+      method: 'GET',
+      path: pathAndQuery,
+      headers: {
+        Host: target.url.host,
+        'User-Agent': 'Mozilla/5.0 (compatible; LinkTwinBot/2.0)',
+        Accept: 'text/html,application/xhtml+xml,image/*,*/*;q=0.8',
+        ...headers,
+      },
+      ...(isHttps ? { servername: target.url.hostname } : {}),
+    };
+
+    const req = lib.request(reqOptions, (res) => {
+      const status = res.statusCode || 500;
+      const contentLen = Number(res.headers['content-length'] || 0);
+      if (contentLen > maxBytes) {
+        req.destroy();
+        reject(new Error(`Response size (${contentLen} bytes) exceeds safety limit.`));
+        return;
+      }
+
+      const chunks: Buffer[] = [];
+      let totalBytes = 0;
+
+      res.on('data', (chunk: Buffer) => {
+        totalBytes += chunk.length;
+        if (totalBytes > maxBytes) {
+          req.destroy();
+          reject(new Error(`Response exceeded ${maxBytes} byte safety limit.`));
+          return;
+        }
+        chunks.push(chunk);
+      });
+
+      res.on('end', () => {
+        resolve({ status, headers: res.headers, bodyBuffer: Buffer.concat(chunks) });
+      });
+
+      res.on('error', (err) => reject(err));
+    });
+
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(new Error(`Request timed out after ${timeoutMs}ms`));
+    });
+
+    req.on('error', (err) => reject(err));
+    req.end();
+  });
+}
+
+/**
+ * Performs an SSRF-safe HTTP/HTTPS GET fetch pinned directly to the validated resolved IP
+ * (preventing DNS rebinding TOCTOU attacks), re-validating every 3xx redirect hop.
  */
 export async function safeFetchExternalUrl(
   rawUrl: string,
@@ -223,73 +338,40 @@ export async function safeFetchExternalUrl(
     maxBytes?: number;
     maxRedirects?: number;
   } = {}
-): Promise<{ finalUrl: string; status: number; headers: Headers; bodyText: string }> {
+): Promise<{ finalUrl: string; status: number; headers: Headers; bodyText: string; bodyBuffer: Buffer }> {
   const timeoutMs = options.timeoutMs ?? 4500;
-  const maxBytes = options.maxBytes ?? 1024 * 1024; // 1 MB cap
+  const maxBytes = options.maxBytes ?? 1024 * 1024;
   const maxRedirects = options.maxRedirects ?? 3;
 
-  let currentUrl = (await validatePublicUrlForFetch(rawUrl)).toString();
+  let resolvedTarget = await resolveAndValidatePublicUrl(rawUrl);
 
   for (let hop = 0; hop <= maxRedirects; hop++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const res = await pinnedRequest(resolvedTarget, options.headers || {}, timeoutMs, maxBytes);
 
-    try {
-      const res = await fetch(currentUrl, {
-        method: 'GET',
-        redirect: 'manual',
-        signal: controller.signal,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; LinkTwinBot/2.0)',
-          ...(options.headers || {}),
-        },
-      });
-      clearTimeout(timer);
-
-      if (res.status >= 300 && res.status < 400) {
-        const location = res.headers.get('location');
-        if (!location) {
-          throw new Error('Redirect response missing Location header.');
-        }
-        const resolvedNext = new URL(location, currentUrl).toString();
-        currentUrl = (await validatePublicUrlForFetch(resolvedNext)).toString();
-        continue;
+    if (res.status >= 300 && res.status < 400) {
+      const rawLoc = res.headers['location'];
+      const location = Array.isArray(rawLoc) ? rawLoc[0] : rawLoc;
+      if (!location) {
+        throw new Error('Redirect response missing Location header.');
       }
-
-      const contentLen = Number(res.headers.get('content-length') || 0);
-      if (contentLen > maxBytes) {
-        throw new Error(`Response size (${contentLen} bytes) exceeds safety limit.`);
-      }
-
-      if (!res.body) {
-        return { finalUrl: currentUrl, status: res.status, headers: res.headers, bodyText: '' };
-      }
-
-      const reader = res.body.getReader();
-      const chunks: Uint8Array[] = [];
-      let totalBytes = 0;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) {
-          totalBytes += value.length;
-          if (totalBytes > maxBytes) {
-            await reader.cancel();
-            throw new Error(`Response exceeded ${maxBytes} byte safety limit.`);
-          }
-          chunks.push(value);
-        }
-      }
-
-      const decoder = new TextDecoder('utf-8', { fatal: false });
-      const bodyText = decoder.decode(Buffer.concat(chunks));
-
-      return { finalUrl: currentUrl, status: res.status, headers: res.headers, bodyText };
-    } catch (err) {
-      clearTimeout(timer);
-      throw err;
+      const nextUrl = new URL(location, resolvedTarget.url.toString()).toString();
+      resolvedTarget = await resolveAndValidatePublicUrl(nextUrl);
+      continue;
     }
+
+    const webHeaders = new Headers();
+    for (const [k, v] of Object.entries(res.headers)) {
+      if (typeof v === 'string') webHeaders.set(k, v);
+      else if (Array.isArray(v)) webHeaders.set(k, v.join(', '));
+    }
+
+    return {
+      finalUrl: resolvedTarget.url.toString(),
+      status: res.status,
+      headers: webHeaders,
+      bodyText: res.bodyBuffer.toString('utf8'),
+      bodyBuffer: res.bodyBuffer,
+    };
   }
 
   throw new Error('Too many HTTP redirects.');

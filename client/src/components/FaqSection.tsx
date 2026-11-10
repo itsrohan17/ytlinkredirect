@@ -22,8 +22,8 @@ export const FaqSection: React.FC = () => {
       a: 'Yes! When social bots and messaging crawlers (such as WhatsApp, Telegram, Discord, or X) request a short link, our server responds with full OpenGraph and App Links metadata so chat cards display thumbnails, titles, and creator details.',
     },
     {
-      q: 'What can I download in the Media Tools section?',
-      a: 'Media Tools strictly provides permitted public assets and official creator workflows: 1-click HD/SD YouTube thumbnail downloads, official embed HTML snippets, and step-by-step instructions for downloading your own content via YouTube Studio, Meta Accounts Center, and Meta Business Suite. We never bypass DRM, private accounts, or platform protections.',
+      q: 'What is included in the Media Studio?',
+      a: 'Media Studio includes four modules: Video Converter (convert and trim your own videos with browser FFmpeg WebAssembly or an optional background worker), Image Studio (batch convert, resize, crop, and compress JPG/PNG/WebP/AVIF), Thumbnail Studio (retrieve permitted YouTube/Instagram/Facebook preview thumbnails and edit with text/shapes), and Audio Studio (convert, trim, and visualize waveforms). We do not scrape private content or provide social media video downloading.',
     },
     {
       q: 'Are existing YouTube short links and analytics preserved?',

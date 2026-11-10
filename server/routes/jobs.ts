@@ -6,6 +6,7 @@ import {
   getMediaJobById,
   getRecentMediaJobs,
   getStorageUsageSummary,
+  markMediaJobExpired,
 } from '../db.js';
 import {
   isAllowedMimeForCategory,
@@ -15,6 +16,7 @@ import {
 import {
   buildStorageKey,
   createPresignedS3Url,
+  deleteObjectFromStorage,
   generateOwnerToken,
   getExpirationIso,
   hashOwnerToken,
@@ -152,6 +154,9 @@ jobsRouter.post('/', async (req: Request, res: Response) => {
       return res.status(400).json({ error: `Unsupported MIME type: ${inputMime}` });
     }
 
+    if (mode === 'server-worker' && !headerHex) {
+      return res.status(400).json({ error: 'File signature headerHex is required for worker jobs.' });
+    }
     if (headerHex) {
       const sig = verifyMagicBytes(String(headerHex), cat);
       if (!sig.valid) {
@@ -209,10 +214,12 @@ jobsRouter.post('/', async (req: Request, res: Response) => {
       expiresAt: mode === 'server-worker' ? getExpirationIso() : null,
     });
 
+    const cookieFlags = `HttpOnly; SameSite=Lax; Path=/; Max-Age=86400${process.env.VERCEL ? '; Secure' : ''}`;
+    res.setHeader('Set-Cookie', `lt_job_${jobId}=${ownerToken}; ${cookieFlags}`);
+
     return res.status(201).json({
       success: true,
       job: sanitizeJobForClient(record),
-      ownerToken,
       signedUploadUrl,
       signedUrlExpiresInSeconds: signedUploadUrl ? SIGNED_URL_TTL_SECONDS : null,
     });
@@ -222,17 +229,47 @@ jobsRouter.post('/', async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/jobs/cleanup - Trigger expired media cleanup sweep (protected if CRON_SECRET set)
-jobsRouter.post('/cleanup', async (req: Request, res: Response) => {
-  const secret = process.env.CRON_SECRET || process.env.WORKER_SECRET;
-  if (secret) {
-    const authHeader = String(req.headers['authorization'] || '');
-    if (authHeader !== `Bearer ${secret}`) {
-      return res.status(401).json({ error: 'Unauthorized cleanup request.' });
+function extractJobToken(req: Request, jobId: string): string {
+  const headerToken = req.headers['x-job-token'];
+  if (typeof headerToken === 'string' && headerToken.trim()) {
+    return headerToken.trim();
+  }
+  const cookieHeader = String(req.headers['cookie'] || '');
+  const prefix = `lt_job_${jobId}=`;
+  for (const part of cookieHeader.split(';')) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith(prefix)) {
+      return trimmed.slice(prefix.length).trim();
     }
   }
+  return '';
+}
 
+// POST /api/jobs/cleanup - Enforces either job owner token (for single job) or configured CRON_SECRET (for global sweep)
+jobsRouter.post('/cleanup', async (req: Request, res: Response) => {
   try {
+    const jobId = req.body?.jobId ? String(req.body.jobId) : null;
+    if (jobId) {
+      const job = await getMediaJobById(jobId);
+      if (!job) {
+        return res.status(404).json({ error: 'Job not found.' });
+      }
+      const token = extractJobToken(req, jobId);
+      if (!verifyOwnerToken(token, job.owner_token_hash)) {
+        return res.status(403).json({ error: 'Invalid or missing job ownership token.' });
+      }
+      if (job.storage_key) await deleteObjectFromStorage(job.storage_key);
+      if (job.output_storage_key) await deleteObjectFromStorage(job.output_storage_key);
+      await markMediaJobExpired(job.job_id);
+      return res.json({ success: true, cleanedCount: 1 });
+    }
+
+    const secret = process.env.CRON_SECRET || process.env.WORKER_SECRET;
+    const authHeader = String(req.headers['authorization'] || '');
+    if (!secret || authHeader !== `Bearer ${secret}`) {
+      return res.status(401).json({ error: 'Unauthorized global cleanup request.' });
+    }
+
     const result = await runCleanupSweep();
     return res.json({ success: true, ...result });
   } catch (err) {
@@ -250,7 +287,7 @@ jobsRouter.get('/:jobId', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Job not found.' });
     }
 
-    const token = String(req.headers['x-job-token'] || req.query.token || '');
+    const token = extractJobToken(req, jobId);
     if (!verifyOwnerToken(token, job.owner_token_hash)) {
       return res.status(403).json({ error: 'Invalid or missing job ownership token.' });
     }

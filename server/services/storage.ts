@@ -4,7 +4,7 @@ import { sanitizeFilename } from './fileSecurity.js';
 export const MAX_BROWSER_MB = Number(process.env.MAX_BROWSER_MB || 100);
 export const MAX_WORKER_MB = Number(process.env.MAX_WORKER_MB || 500);
 export const FILE_TTL_HOURS = Number(process.env.FILE_TTL_HOURS || 24);
-export const SIGNED_URL_TTL_SECONDS = Math.min(3600, Math.max(60, Number(process.env.SIGNED_URL_TTL_SECONDS || 600)));
+export const SIGNED_URL_TTL_SECONDS = Math.min(900, Math.max(60, Number(process.env.SIGNED_URL_TTL_SECONDS || 300)));
 
 export function generateOwnerToken(): string {
   return crypto.randomBytes(24).toString('hex');

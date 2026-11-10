@@ -34,12 +34,18 @@ async function ensureColumn(
 export async function initDb(customDbPath?: string): Promise<Client> {
   if (client && !customDbPath) return client;
 
-  const url = customDbPath ? `file:${customDbPath}` : (process.env.TURSO_DATABASE_URL || process.env.DATABASE_URL);
+  const url = customDbPath
+    ? customDbPath === ':memory:'
+      ? ':memory:'
+      : `file:${customDbPath}`
+    : process.env.TURSO_DATABASE_URL || process.env.DATABASE_URL;
   const authToken = customDbPath ? undefined : process.env.TURSO_AUTH_TOKEN;
 
   let activeClient: Client;
 
-  if (url && !url.startsWith('file:')) {
+  if (url === ':memory:') {
+    activeClient = createClient({ url: ':memory:' });
+  } else if (url && !url.startsWith('file:')) {
     const masked = url.replace(/:\/\/.*@/, '://***@');
     console.log(`📡 [Database] Connecting to remote Turso database at: ${masked}`);
     try {
@@ -159,7 +165,7 @@ export async function initDb(customDbPath?: string): Promise<Client> {
   await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_media_jobs_expires ON media_jobs(expires_at);`);
   await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_media_jobs_dedupe ON media_jobs(dedupe_key);`);
 
-  if (!customDbPath) {
+  if (!customDbPath || customDbPath === ':memory:') {
     client = activeClient;
   }
   return activeClient;

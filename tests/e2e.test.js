@@ -134,31 +134,31 @@ async function runTests() {
     assert.ok(summaryData.summary.byPlatform.facebook.links >= 1);
     console.log('[Pass 10] Advanced analytics & platform summary verified');
 
-    // Test 11: Media Tools API (YouTube thumbnail, IG/FB official guide)
-    const mediaYt = await fetch('http://localhost:3000/api/media/inspect', {
+    // Test 11: Thumbnail Studio API (YouTube & IG public preview thumbnails)
+    const mediaYt = await fetch('http://localhost:3000/api/media/thumbnail/inspect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' }),
     });
     const mediaYtData = await mediaYt.json();
     assert.strictEqual(mediaYt.status, 200);
-    assert.ok(mediaYtData.permittedAssets.length >= 3);
-    assert.ok(mediaYtData.embedCode.includes('youtube-nocookie.com'));
+    assert.strictEqual(mediaYtData.permittedAssets.length, 3);
+    assert.ok(mediaYtData.thumbnailInfo.proxyUrl.includes('/api/media/thumbnail'));
 
     const thumbRes = await fetch('http://localhost:3000/api/media/thumbnail?videoId=dQw4w9WgXcQ&quality=hq');
     assert.strictEqual(thumbRes.status, 200);
     assert.strictEqual(thumbRes.headers.get('content-type'), 'image/jpeg');
 
-    const mediaIg = await fetch('http://localhost:3000/api/media/inspect', {
+    const mediaIg = await fetch('http://localhost:3000/api/media/thumbnail/inspect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: 'https://www.instagram.com/reel/C0xample123/' }),
     });
     const mediaIgData = await mediaIg.json();
     assert.strictEqual(mediaIg.status, 200);
-    assert.strictEqual(mediaIgData.permittedAssets.length, 0);
-    assert.ok(mediaIgData.unsupportedExplanation.length > 20);
-    console.log('[Pass 11] Media Tools API & safe thumbnail download verified');
+    assert.strictEqual(mediaIgData.platform, 'instagram');
+    assert.ok(mediaIgData.publicAccessNote.length > 20);
+    console.log('[Pass 11] Thumbnail Studio API & safe thumbnail download verified');
 
     console.log('=== ALL 11 MULTI-PLATFORM E2E TESTS PASSED ===');
   } catch (err) {
