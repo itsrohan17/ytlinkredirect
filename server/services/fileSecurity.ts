@@ -265,7 +265,8 @@ function pinnedRequest(
   target: { url: URL; resolvedIp: string; family: 4 | 6 },
   headers: Record<string, string>,
   timeoutMs: number,
-  maxBytes: number
+  maxBytes: number,
+  method: 'GET' | 'HEAD' = 'GET'
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders; bodyBuffer: Buffer }> {
   return new Promise((resolve, reject) => {
     const isHttps = target.url.protocol === 'https:';
@@ -278,7 +279,7 @@ function pinnedRequest(
       host: target.resolvedIp,
       port,
       family: target.family,
-      method: 'GET',
+      method,
       path: pathAndQuery,
       headers: {
         Host: target.url.host,
@@ -338,16 +339,18 @@ export async function safeFetchExternalUrl(
     timeoutMs?: number;
     maxBytes?: number;
     maxRedirects?: number;
+    method?: 'GET' | 'HEAD';
   } = {}
 ): Promise<{ finalUrl: string; status: number; headers: Headers; bodyText: string; bodyBuffer: Buffer }> {
   const timeoutMs = options.timeoutMs ?? 4500;
   const maxBytes = options.maxBytes ?? 1024 * 1024;
   const maxRedirects = options.maxRedirects ?? 3;
+  const method = options.method ?? 'GET';
 
   let resolvedTarget = await resolveAndValidatePublicUrl(rawUrl);
 
   for (let hop = 0; hop <= maxRedirects; hop++) {
-    const res = await pinnedRequest(resolvedTarget, options.headers || {}, timeoutMs, maxBytes);
+    const res = await pinnedRequest(resolvedTarget, options.headers || {}, timeoutMs, maxBytes, method);
 
     if (res.status >= 300 && res.status < 400) {
       const rawLoc = res.headers['location'];

@@ -145,31 +145,38 @@ async function runTests() {
     assert.ok(summaryData.summary.byPlatform.facebook.links >= 1);
     console.log('[Pass 10] Advanced analytics & platform summary verified');
 
-    // Test 11: Thumbnail Studio API (YouTube & IG public preview thumbnails)
-    const mediaYt = await fetch('http://localhost:3000/api/media/thumbnail/inspect', {
+    // Test 11: YouTube Thumbnail Downloader & AI Config Endpoints
+    const thumbYt = await fetch('http://localhost:3000/api/thumbnails/inspect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' }),
     });
-    const mediaYtData = await mediaYt.json();
-    assert.strictEqual(mediaYt.status, 200);
-    assert.strictEqual(mediaYtData.permittedAssets.length, 3);
-    assert.ok(mediaYtData.thumbnailInfo.proxyUrl.includes('/api/media/thumbnail'));
+    const thumbYtData = await thumbYt.json();
+    assert.strictEqual(thumbYt.status, 200);
+    assert.strictEqual(thumbYtData.videoId, 'dQw4w9WgXcQ');
+    assert.ok(thumbYtData.resolutions.length === 5);
+    assert.ok(thumbYtData.highestAvailable && thumbYtData.highestAvailable.available === true);
 
-    const thumbRes = await fetch('http://localhost:3000/api/media/thumbnail?videoId=dQw4w9WgXcQ&quality=hq');
+    const thumbRes = await fetch('http://localhost:3000/api/thumbnails/image?videoId=dQw4w9WgXcQ&quality=hq');
     assert.strictEqual(thumbRes.status, 200);
     assert.strictEqual(thumbRes.headers.get('content-type'), 'image/jpeg');
 
-    const mediaIg = await fetch('http://localhost:3000/api/media/thumbnail/inspect', {
+    // Legacy thumbnail alias preserved
+    const legacyThumbRes = await fetch('http://localhost:3000/api/media/thumbnail?videoId=dQw4w9WgXcQ&quality=hq');
+    assert.strictEqual(legacyThumbRes.status, 200);
+
+    // Thumbnail Downloader rejects non-YouTube URLs cleanly
+    const nonYtThumb = await fetch('http://localhost:3000/api/thumbnails/inspect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: 'https://www.instagram.com/reel/C0xample123/' }),
     });
-    const mediaIgData = await mediaIg.json();
-    assert.strictEqual(mediaIg.status, 200);
-    assert.strictEqual(mediaIgData.platform, 'instagram');
-    assert.ok(mediaIgData.publicAccessNote.length > 20);
-    console.log('[Pass 11] Thumbnail Studio API & safe thumbnail download verified');
+    assert.strictEqual(nonYtThumb.status, 400);
+
+    const aiCfg = await fetch('http://localhost:3000/api/ai/config').then((r) => r.json());
+    assert.strictEqual(aiCfg.success, true);
+    assert.ok(aiCfg.model.includes('flux'));
+    console.log('[Pass 11] Dedicated YouTube Thumbnail Downloader & AI Config verified');
 
     console.log('=== ALL 11 MULTI-PLATFORM E2E TESTS PASSED ===');
   } catch (err) {

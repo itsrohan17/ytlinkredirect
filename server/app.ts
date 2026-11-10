@@ -6,21 +6,15 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { getDatabaseMode, getLinkByCode } from './db.js';
-import {
-  isObjectStorageConfigured,
-  MAX_BROWSER_MB,
-  MAX_WORKER_MB,
-  SIGNED_URL_TTL_SECONDS,
-} from './services/storage.js';
 import { linksRouter } from './routes/links.js';
-import { mediaRouter } from './routes/media.js';
-import { jobsRouter } from './routes/jobs.js';
-import { utilitiesRouter } from './routes/utilities.js';
+import { thumbnailsRouter } from './routes/thumbnails.js';
+import { aiRouter } from './routes/ai.js';
 import {
   enforceSameOriginOnMutations,
   getAllowedOrigins,
   isSessionSecretConfigured,
 } from './services/session.js';
+import { getConfiguredNvidiaModel, isNvidiaAiConfigured } from './services/nvidiaFlux.js';
 import { handleSmartRedirect } from './redirect.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -28,10 +22,9 @@ const __dirname = path.dirname(__filename);
 
 export const app = express();
 
-// Trust proxy for rate limiting, IP detection, and protocol detection on Vercel/proxies
+// Trust proxy for rate limiting, IP detection, and protocol detection behind Vercel/reverse proxies
 app.set('trust proxy', 1);
 
-// Basic security headers, permitting required images and inline scripts for redirect UX
 app.use(
   helmet({
     contentSecurityPolicy: false,
@@ -51,10 +44,11 @@ app.use((req, res, next) => {
   }
   return cors({ origin: false })(req, res, next);
 });
-app.use(express.json());
+
+app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Request logging for production observability
+// Request logging (never logs headers, cookies, or secrets)
 app.use((req, res, next) => {
   const start = Date.now();
   res.on('finish', () => {
@@ -65,8 +59,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Rate limiting: 60 write mutations / 15 min & 300 reads / 15 min per IP
-const linkCreateLimiter = rateLimit({
+const writeLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 60,
   skip: (req) => req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS',
@@ -85,7 +78,6 @@ const apiReadLimiter = rateLimit({
 });
 
 function buildHealthPayload() {
-  const objectStorageConfigured = isObjectStorageConfigured();
   return {
     status: 'healthy',
     timestamp: new Date().toISOString(),
@@ -93,19 +85,12 @@ function buildHealthPayload() {
     capabilities: {
       databaseMode: getDatabaseMode(),
       sessionConfigured: isSessionSecretConfigured(),
-      objectStorageConfigured,
-      workerQueueSupported: objectStorageConfigured,
-      limits: {
-        browserWasmMaxMb: MAX_BROWSER_MB,
-        workerMaxMb: MAX_WORKER_MB,
-        signedUrlTtlSeconds: SIGNED_URL_TTL_SECONDS,
-        fileTtlHours: Number(process.env.FILE_TTL_HOURS || 24),
-      },
+      aiConfigured: isNvidiaAiConfigured(),
+      aiModel: getConfiguredNvidiaModel(),
     },
   };
 }
 
-// Health check endpoint
 app.get('/health', (_req, res) => {
   res.status(200).json(buildHealthPayload());
 });
@@ -114,25 +99,22 @@ app.get('/api/health', (_req, res) => {
   res.status(200).json(buildHealthPayload());
 });
 
-// Enforce CSRF same-origin guard + read/write rate limits on all API routers
-app.use('/api/utilities', enforceSameOriginOnMutations, apiReadLimiter, linkCreateLimiter, utilitiesRouter);
-app.use('/utilities', enforceSameOriginOnMutations, apiReadLimiter, linkCreateLimiter, utilitiesRouter);
+// Core product API routers (CSRF origin-enforced + rate-limited)
+app.use('/api/ai', enforceSameOriginOnMutations, apiReadLimiter, aiRouter);
+app.use('/ai', enforceSameOriginOnMutations, apiReadLimiter, aiRouter);
 
-app.use('/api/jobs', enforceSameOriginOnMutations, apiReadLimiter, linkCreateLimiter, jobsRouter);
-app.use('/jobs', enforceSameOriginOnMutations, apiReadLimiter, linkCreateLimiter, jobsRouter);
+app.use('/api/thumbnails', enforceSameOriginOnMutations, apiReadLimiter, writeLimiter, thumbnailsRouter);
+app.use('/thumbnails', enforceSameOriginOnMutations, apiReadLimiter, writeLimiter, thumbnailsRouter);
+app.use('/api/media', apiReadLimiter, thumbnailsRouter); // Preserves legacy /api/media/thumbnail?videoId=...&quality=...
 
-app.use('/api/media', enforceSameOriginOnMutations, apiReadLimiter, linkCreateLimiter, mediaRouter);
-app.use('/media', enforceSameOriginOnMutations, apiReadLimiter, linkCreateLimiter, mediaRouter);
-
-app.use('/api/links', enforceSameOriginOnMutations, apiReadLimiter, linkCreateLimiter, linksRouter);
-app.use('/links', enforceSameOriginOnMutations, apiReadLimiter, linkCreateLimiter, linksRouter);
+app.use('/api/links', enforceSameOriginOnMutations, apiReadLimiter, writeLimiter, linksRouter);
+app.use('/links', enforceSameOriginOnMutations, apiReadLimiter, writeLimiter, linksRouter);
 app.use('/api', enforceSameOriginOnMutations, apiReadLimiter, linksRouter);
 
-// Smart Redirect route: /:code
+// Public Smart Redirect route: /:code (YouTube, Instagram, Facebook)
 app.get('/:code', async (req, res, next) => {
   const code = String(req.params.code || '');
 
-  // Skip static assets or reserved prefixes
   if (
     code.includes('.') ||
     code.startsWith('api') ||
@@ -141,13 +123,13 @@ app.get('/:code', async (req, res, next) => {
     code === 'robots.txt' ||
     code === 'health' ||
     code === 'preview' ||
-    code === 'analytics' ||
     code === 'session' ||
     code === 'recent' ||
     code === 'links' ||
+    code === 'thumbnails' ||
+    code === 'thumbnail' ||
     code === 'media' ||
-    code === 'jobs' ||
-    code === 'utilities' ||
+    code === 'ai' ||
     code === 'summary'
   ) {
     return next();
@@ -165,12 +147,17 @@ app.get('/:code', async (req, res, next) => {
   next();
 });
 
-// Standalone Production: Serve built Vite client files if they exist on disk
+// Standalone Production: serve built Vite client files
 const clientDistPath = path.resolve(process.cwd(), 'dist-client');
 if (fs.existsSync(clientDistPath) && !process.env.VERCEL) {
   app.use(express.static(clientDistPath));
   app.get('*', (req, res, next) => {
-    if (req.path.startsWith('/api') || req.path.startsWith('/links')) {
+    if (
+      req.path.startsWith('/api') ||
+      req.path.startsWith('/links') ||
+      req.path.startsWith('/thumbnails') ||
+      req.path.startsWith('/ai')
+    ) {
       return next();
     }
     res.sendFile(path.join(clientDistPath, 'index.html'));
@@ -182,24 +169,20 @@ app.use((req, res, next) => {
   if (
     req.path.startsWith('/api') ||
     req.path.startsWith('/links') ||
-    req.path.startsWith('/media') ||
-    req.path.startsWith('/jobs') ||
-    req.path.startsWith('/utilities')
+    req.path.startsWith('/thumbnails') ||
+    req.path.startsWith('/ai')
   ) {
     return res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.originalUrl}` });
   }
   next();
 });
 
-// Global Error Handler - ALWAYS returns JSON
+// Global Error Handler - ALWAYS returns JSON (never echoes credentials)
 app.use((err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error(`❌ [Express Unhandled Error] ${req.method} ${req.originalUrl}:`, err);
-  const status = typeof err.status === 'number' && err.status >= 400 && err.status < 600 ? err.status : 500;
+  console.error(`❌ [Express Unhandled Error] ${req.method} ${req.originalUrl}:`, err?.message || err);
+  const status = typeof err?.status === 'number' && err.status >= 400 && err.status < 600 ? err.status : 500;
   res.setHeader('Content-Type', 'application/json');
   res.status(status).json({
-    error: err.message || 'Internal server error occurred',
-    code: err.code || 'INTERNAL_ERROR',
+    error: status === 500 ? 'Internal server error' : err?.message || 'Request failed',
   });
 });
-
-export default app;

@@ -4,17 +4,10 @@ import path from 'path';
 import {
   ClickRecord,
   ContentType,
-  GlobalAnalyticsDashboard,
   LinkRecord,
   LinkStats,
-  MediaJobRecord,
-  MediaJobStatus,
-  MediaModule,
-  PaginatedLinksResult,
   Platform,
   PlatformAnalyticsSummary,
-  ProcessingMode,
-  StorageUsageSummary,
 } from './types.js';
 
 let client: Client | null = null;
@@ -132,7 +125,7 @@ export async function initDb(customDbPath?: string): Promise<Client> {
   await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_clicks_link_id ON clicks(link_id);`);
   await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_clicks_created ON clicks(created_at);`);
 
-  // Non-destructive, idempotent migrations for multi-platform & advanced analytics
+  // Non-destructive, idempotent column migrations (preserves all existing records & tables)
   await ensureColumn(activeClient, 'links', 'platform', "TEXT DEFAULT 'youtube'");
   await ensureColumn(activeClient, 'links', 'content_id', 'TEXT');
   await ensureColumn(activeClient, 'links', 'owner_token_hash', 'TEXT');
@@ -142,44 +135,6 @@ export async function initDb(customDbPath?: string): Promise<Client> {
   await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_links_platform ON links(platform);`);
   await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_links_owner ON links(owner_token_hash);`);
   await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_clicks_platform ON clicks(platform);`);
-
-  // Media Studio job metadata table (stores metadata & object storage references only, never binaries)
-  await activeClient.execute(`
-    CREATE TABLE IF NOT EXISTS media_jobs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      job_id TEXT UNIQUE NOT NULL,
-      module TEXT NOT NULL,
-      processing_mode TEXT NOT NULL,
-      input_filename TEXT NOT NULL,
-      input_mime TEXT NOT NULL,
-      input_size INTEGER NOT NULL,
-      output_format TEXT NOT NULL,
-      output_size INTEGER,
-      status TEXT NOT NULL DEFAULT 'completed',
-      storage_key TEXT,
-      output_storage_key TEXT,
-      owner_token_hash TEXT,
-      dedupe_key TEXT,
-      retry_count INTEGER DEFAULT 0,
-      max_retries INTEGER DEFAULT 2,
-      error_message TEXT,
-      expires_at DATETIME,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-
-  await ensureColumn(activeClient, 'media_jobs', 'owner_token_hash', 'TEXT');
-  await ensureColumn(activeClient, 'media_jobs', 'session_token_hash', 'TEXT');
-  await ensureColumn(activeClient, 'media_jobs', 'dedupe_key', 'TEXT');
-  await ensureColumn(activeClient, 'media_jobs', 'retry_count', 'INTEGER DEFAULT 0');
-  await ensureColumn(activeClient, 'media_jobs', 'max_retries', 'INTEGER DEFAULT 2');
-
-  await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_media_jobs_job_id ON media_jobs(job_id);`);
-  await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_media_jobs_status ON media_jobs(status);`);
-  await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_media_jobs_expires ON media_jobs(expires_at);`);
-  await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_media_jobs_dedupe ON media_jobs(dedupe_key);`);
-  await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_media_jobs_session ON media_jobs(session_token_hash);`);
 
   if (!customDbPath || customDbPath === ':memory:') {
     client = activeClient;
@@ -353,7 +308,6 @@ export async function getLinkStats(code: string, dbOverride?: Client): Promise<L
   const link = await getLinkByCode(code, db);
   if (!link) return null;
 
-  // Device counts
   const devRes = await db.execute({
     sql: 'SELECT device_type, COUNT(*) as count FROM clicks WHERE link_id = ? GROUP BY device_type',
     args: [link.id],
@@ -368,14 +322,12 @@ export async function getLinkStats(code: string, dbOverride?: Client): Promise<L
     else devices.other += count;
   }
 
-  // In-app count
   const inAppRes = await db.execute({
     sql: 'SELECT COUNT(*) as cnt FROM clicks WHERE link_id = ? AND is_in_app_browser = 1',
     args: [link.id],
   });
   const inAppCount = inAppRes.rows.length > 0 ? Number(inAppRes.rows[0].cnt || 0) : 0;
 
-  // Top referrers
   const refRes = await db.execute({
     sql: 'SELECT referrer, COUNT(*) as count FROM clicks WHERE link_id = ? GROUP BY referrer ORDER BY count DESC LIMIT 10',
     args: [link.id],
@@ -385,7 +337,6 @@ export async function getLinkStats(code: string, dbOverride?: Client): Promise<L
     referrers[String(r.referrer || 'Direct')] = Number(r.count || 0);
   }
 
-  // Top browsers
   const browserRes = await db.execute({
     sql: 'SELECT browser_name, COUNT(*) as count FROM clicks WHERE link_id = ? GROUP BY browser_name ORDER BY count DESC LIMIT 10',
     args: [link.id],
@@ -395,7 +346,6 @@ export async function getLinkStats(code: string, dbOverride?: Client): Promise<L
     browsers[String(r.browser_name || 'Unknown')] = Number(r.count || 0);
   }
 
-  // Top countries
   const countryRes = await db.execute({
     sql: 'SELECT country, COUNT(*) as count FROM clicks WHERE link_id = ? GROUP BY country ORDER BY count DESC LIMIT 10',
     args: [link.id],
@@ -405,7 +355,6 @@ export async function getLinkStats(code: string, dbOverride?: Client): Promise<L
     countries[String(r.country || 'Unknown')] = Number(r.count || 0);
   }
 
-  // Recent clicks
   const recentRes = await db.execute({
     sql: 'SELECT platform, device_type, os_name, browser_name, is_in_app_browser, referrer, country, created_at FROM clicks WHERE link_id = ? ORDER BY id DESC LIMIT 15',
     args: [link.id],
@@ -556,401 +505,6 @@ export async function getRecentLinks(
   return res.rows.map((r) => mapLinkRow(r, callerOwnerHash));
 }
 
-export async function listLinksPaginated(
-  options: {
-    page?: number;
-    limit?: number;
-    search?: string;
-    platform?: string;
-    sort?: string;
-    callerOwnerHash: string;
-  },
-  dbOverride?: Client
-): Promise<PaginatedLinksResult> {
-  const db = dbOverride || (await getDb());
-  const page = Math.max(1, Number(options.page || 1));
-  const limit = Math.min(50, Math.max(1, Number(options.limit || 12)));
-  const offset = (page - 1) * limit;
-
-  // Strict owner isolation: always scope to callerOwnerHash
-  const conditions: string[] = ['owner_token_hash = ?'];
-  const args: Array<string | number> = [options.callerOwnerHash];
-
-  const plat = (options.platform || 'all').toLowerCase();
-  if (plat === 'youtube' || plat === 'instagram' || plat === 'facebook') {
-    conditions.push("LOWER(COALESCE(platform, 'youtube')) = ?");
-    args.push(plat);
-  }
-
-  const q = (options.search || '').trim().toLowerCase();
-  if (q) {
-    const pattern = `%${q}%`;
-    conditions.push(
-      '(LOWER(code) LIKE ? OR LOWER(title) LIKE ? OR LOWER(author_name) LIKE ? OR LOWER(original_url) LIKE ?)'
-    );
-    args.push(pattern, pattern, pattern, pattern);
-  }
-
-  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-  let orderClause = 'ORDER BY id DESC';
-  if (options.sort === 'oldest') orderClause = 'ORDER BY id ASC';
-  else if (options.sort === 'most_clicks') orderClause = 'ORDER BY click_count DESC, id DESC';
-
-  const countRes = await db.execute({
-    sql: `SELECT COUNT(*) as total FROM links ${whereClause}`,
-    args,
-  });
-  const total = Number(countRes.rows[0]?.total || 0);
-  const totalPages = Math.max(1, Math.ceil(total / limit));
-
-  const rowsRes = await db.execute({
-    sql: `SELECT * FROM links ${whereClause} ${orderClause} LIMIT ? OFFSET ?`,
-    args: [...args, limit, offset],
-  });
-
-  return {
-    links: rowsRes.rows.map((r) => mapLinkRow(r, options.callerOwnerHash)),
-    pagination: {
-      page,
-      limit,
-      total,
-      totalPages,
-    },
-  };
-}
-
-export async function updateLinkByCode(
-  code: string,
-  updates: {
-    title?: string;
-    originalUrl?: string;
-    cleanUrl?: string;
-    platform?: Platform;
-    urlType?: ContentType;
-    contentId?: string | null;
-    videoId?: string | null;
-    playlistId?: string | null;
-    channelId?: string | null;
-    authorName?: string;
-    thumbnailUrl?: string;
-  },
-  dbOverride?: Client,
-  callerOwnerHash?: string | null
-): Promise<LinkRecord | null> {
-  const db = dbOverride || (await getDb());
-  const existing = await getLinkByCode(code, db, callerOwnerHash);
-  if (!existing) return null;
-
-  await db.execute({
-    sql: `UPDATE links SET
-      title = ?,
-      original_url = ?,
-      clean_youtube_url = ?,
-      platform = ?,
-      url_type = ?,
-      content_id = ?,
-      video_id = ?,
-      playlist_id = ?,
-      channel_id = ?,
-      author_name = ?,
-      thumbnail_url = ?
-    WHERE code = ?`,
-    args: [
-      updates.title ?? existing.title,
-      updates.originalUrl ?? existing.original_url,
-      updates.cleanUrl ?? existing.clean_url,
-      updates.platform ?? existing.platform,
-      updates.urlType ?? existing.url_type,
-      updates.contentId !== undefined ? updates.contentId : existing.content_id,
-      updates.videoId !== undefined ? updates.videoId : existing.video_id,
-      updates.playlistId !== undefined ? updates.playlistId : existing.playlist_id,
-      updates.channelId !== undefined ? updates.channelId : existing.channel_id,
-      updates.authorName ?? existing.author_name,
-      updates.thumbnailUrl ?? existing.thumbnail_url,
-      code,
-    ],
-  });
-
-  return await getLinkByCode(code, db, callerOwnerHash);
-}
-
-export async function deleteLinkByCode(code: string, dbOverride?: Client): Promise<boolean> {
-  const db = dbOverride || (await getDb());
-  const linkRes = await db.execute({
-    sql: 'SELECT id FROM links WHERE code = ? LIMIT 1',
-    args: [code],
-  });
-  if (linkRes.rows.length === 0) return false;
-  const linkId = Number(linkRes.rows[0].id);
-
-  await db.execute({
-    sql: 'DELETE FROM clicks WHERE link_id = ?',
-    args: [linkId],
-  });
-  const delRes = await db.execute({
-    sql: 'DELETE FROM links WHERE id = ?',
-    args: [linkId],
-  });
-  return (delRes.rowsAffected || 0) > 0;
-}
-
-export async function getGlobalAnalyticsDashboard(
-  options: {
-    ownerTokenHash: string;
-    range?: string;
-    platform?: string;
-    activityPage?: number;
-    activityLimit?: number;
-  },
-  dbOverride?: Client
-): Promise<GlobalAnalyticsDashboard> {
-  const db = dbOverride || (await getDb());
-
-  const range: '7d' | '30d' | '90d' | 'all' =
-    options.range === '7d' || options.range === '90d' || options.range === 'all'
-      ? options.range
-      : '30d';
-
-  const rawPlat = (options.platform || 'all').toLowerCase();
-  const platformFilter: 'all' | Platform =
-    rawPlat === 'youtube' || rawPlat === 'instagram' || rawPlat === 'facebook' ? rawPlat : 'all';
-
-  // Strict owner isolation via INNER JOIN links
-  const conditions: string[] = ['l.owner_token_hash = ?'];
-  const args: Array<string | number> = [options.ownerTokenHash];
-
-  if (range === '7d') conditions.push("c.created_at >= datetime('now', '-7 days')");
-  else if (range === '30d') conditions.push("c.created_at >= datetime('now', '-30 days')");
-  else if (range === '90d') conditions.push("c.created_at >= datetime('now', '-90 days')");
-
-  if (platformFilter !== 'all') {
-    conditions.push("LOWER(COALESCE(c.platform, 'youtube')) = ?");
-    args.push(platformFilter);
-  }
-
-  const whereClause = `WHERE ${conditions.join(' AND ')}`;
-
-  const totRes = await db.execute({
-    sql: `SELECT
-      COUNT(*) as total_clicks,
-      SUM(CASE WHEN c.is_in_app_browser = 1 THEN 1 ELSE 0 END) as in_app_clicks
-    FROM clicks c
-    INNER JOIN links l ON l.id = c.link_id
-    ${whereClause}`,
-    args,
-  });
-  const totalClicksInRange = Number(totRes.rows[0]?.total_clicks || 0);
-  const inAppClicksInRange = Number(totRes.rows[0]?.in_app_clicks || 0);
-
-  // Platform breakdown within range
-  const platRes = await db.execute({
-    sql: `SELECT LOWER(COALESCE(c.platform, 'youtube')) as plat, COUNT(*) as count
-          FROM clicks c
-          INNER JOIN links l ON l.id = c.link_id
-          ${whereClause}
-          GROUP BY plat`,
-    args,
-  });
-  const byPlatform = { youtube: 0, instagram: 0, facebook: 0 };
-  for (const r of platRes.rows) {
-    const p = String(r.plat);
-    const cnt = Number(r.count || 0);
-    if (p === 'youtube' || p === 'instagram' || p === 'facebook') byPlatform[p] = cnt;
-  }
-
-  // Devices within range
-  const devRes = await db.execute({
-    sql: `SELECT LOWER(COALESCE(c.device_type, 'other')) as dev, COUNT(*) as count
-          FROM clicks c
-          INNER JOIN links l ON l.id = c.link_id
-          ${whereClause}
-          GROUP BY dev`,
-    args,
-  });
-  const devices = { android: 0, ios: 0, desktop: 0, other: 0 };
-  for (const r of devRes.rows) {
-    const dev = String(r.dev);
-    const cnt = Number(r.count || 0);
-    if (dev === 'android') devices.android = cnt;
-    else if (dev === 'ios') devices.ios = cnt;
-    else if (dev === 'desktop') devices.desktop = cnt;
-    else devices.other += cnt;
-  }
-
-  // Daily click trend
-  const timeRes = await db.execute({
-    sql: `SELECT date(c.created_at) as day, COUNT(*) as clicks
-          FROM clicks c
-          INNER JOIN links l ON l.id = c.link_id
-          ${whereClause}
-          GROUP BY date(c.created_at)
-          ORDER BY day ASC LIMIT 90`,
-    args,
-  });
-  const timeline = timeRes.rows
-    .filter((r) => r.day)
-    .map((r) => ({
-      date: String(r.day),
-      clicks: Number(r.clicks || 0),
-    }));
-
-  // Geographic breakdown (never fabricate unknown locations)
-  const geoRes = await db.execute({
-    sql: `SELECT COALESCE(NULLIF(TRIM(c.country), ''), 'Unknown') as country, COUNT(*) as count
-          FROM clicks c
-          INNER JOIN links l ON l.id = c.link_id
-          ${whereClause}
-          GROUP BY country
-          ORDER BY count DESC LIMIT 12`,
-    args,
-  });
-  let knownGeoClicks = 0;
-  let unknownGeoClicks = 0;
-  const countries: Array<{ country: string; clicks: number }> = [];
-  for (const r of geoRes.rows) {
-    const name = String(r.country || 'Unknown');
-    const count = Number(r.count || 0);
-    if (name.toLowerCase() === 'unknown') {
-      unknownGeoClicks += count;
-    } else {
-      knownGeoClicks += count;
-      countries.push({ country: name, clicks: count });
-    }
-  }
-
-  const browserRes = await db.execute({
-    sql: `SELECT COALESCE(NULLIF(TRIM(c.browser_name), ''), 'Unknown') as name, COUNT(*) as count
-          FROM clicks c
-          INNER JOIN links l ON l.id = c.link_id
-          ${whereClause}
-          GROUP BY name
-          ORDER BY count DESC LIMIT 8`,
-    args,
-  });
-  const topBrowsers = browserRes.rows.map((r) => ({
-    name: String(r.name || 'Unknown'),
-    clicks: Number(r.count || 0),
-  }));
-
-  const refRes = await db.execute({
-    sql: `SELECT COALESCE(NULLIF(TRIM(c.referrer), ''), 'Direct') as name, COUNT(*) as count
-          FROM clicks c
-          INNER JOIN links l ON l.id = c.link_id
-          ${whereClause}
-          GROUP BY name
-          ORDER BY count DESC LIMIT 8`,
-    args,
-  });
-  const topReferrers = refRes.rows.map((r) => ({
-    name: String(r.name || 'Direct'),
-    clicks: Number(r.count || 0),
-  }));
-
-  // Top links owned by caller matching platform filter
-  const topLinkConds: string[] = ['owner_token_hash = ?'];
-  const topLinkArgs: Array<string> = [options.ownerTokenHash];
-  if (platformFilter !== 'all') {
-    topLinkConds.push("LOWER(COALESCE(platform, 'youtube')) = ?");
-    topLinkArgs.push(platformFilter);
-  }
-  const topLinksRes = await db.execute({
-    sql: `SELECT * FROM links WHERE ${topLinkConds.join(' AND ')} ORDER BY click_count DESC, id DESC LIMIT 5`,
-    args: topLinkArgs,
-  });
-  const topLinks = topLinksRes.rows.map((r) => mapLinkRow(r, options.ownerTokenHash));
-
-  // Paginated recent click activity (INNER JOIN links ensures strictly owner-scoped)
-  const activityPage = Math.max(1, Number(options.activityPage || 1));
-  const activityLimit = Math.min(30, Math.max(1, Number(options.activityLimit || 12)));
-  const activityOffset = (activityPage - 1) * activityLimit;
-
-  const recentRes = await db.execute({
-    sql: `SELECT
-      c.code as link_code,
-      COALESCE(l.title, c.code) as link_title,
-      COALESCE(c.platform, 'youtube') as platform,
-      c.device_type,
-      COALESCE(c.os_name, 'Unknown') as os_name,
-      COALESCE(c.browser_name, 'Unknown') as browser_name,
-      COALESCE(c.is_in_app_browser, 0) as is_in_app_browser,
-      COALESCE(c.referrer, 'Direct') as referrer,
-      COALESCE(c.country, 'Unknown') as country,
-      c.created_at
-    FROM clicks c
-    INNER JOIN links l ON l.id = c.link_id
-    ${whereClause}
-    ORDER BY c.id DESC
-    LIMIT ? OFFSET ?`,
-    args: [...args, activityLimit, activityOffset],
-  });
-
-  const recentClicks = recentRes.rows.map((r: any) => ({
-    link_code: String(r.link_code || ''),
-    link_title: String(r.link_title || ''),
-    platform: String(r.platform || 'youtube'),
-    device_type: String(r.device_type || 'other'),
-    os_name: String(r.os_name || 'Unknown'),
-    browser_name: String(r.browser_name || 'Unknown'),
-    is_in_app_browser: Number(r.is_in_app_browser || 0),
-    referrer: String(r.referrer || 'Direct'),
-    country: String(r.country || 'Unknown'),
-    created_at: String(r.created_at || ''),
-  }));
-
-  const activityTotalPages = Math.max(1, Math.ceil(totalClicksInRange / activityLimit));
-
-  return {
-    range,
-    platform: platformFilter,
-    totalClicksInRange,
-    inAppClicksInRange,
-    byPlatform,
-    devices,
-    timeline,
-    geo: {
-      hasReliableGeoData: knownGeoClicks > 0,
-      knownGeoClicks,
-      unknownGeoClicks,
-      countries,
-    },
-    topBrowsers,
-    topReferrers,
-    topLinks,
-    recentClicks,
-    activityPagination: {
-      page: activityPage,
-      limit: activityLimit,
-      total: totalClicksInRange,
-      totalPages: activityTotalPages,
-    },
-  };
-}
-
-function mapMediaJobRow(row: any): MediaJobRecord {
-  return {
-    id: Number(row.id),
-    job_id: String(row.job_id),
-    module: String(row.module) as MediaModule,
-    processing_mode: String(row.processing_mode) as ProcessingMode,
-    input_filename: String(row.input_filename),
-    input_mime: String(row.input_mime),
-    input_size: Number(row.input_size || 0),
-    output_format: String(row.output_format),
-    output_size: row.output_size !== null && row.output_size !== undefined ? Number(row.output_size) : null,
-    status: String(row.status) as MediaJobStatus,
-    storage_key: row.storage_key ? String(row.storage_key) : null,
-    output_storage_key: row.output_storage_key ? String(row.output_storage_key) : null,
-    owner_token_hash: row.owner_token_hash ? String(row.owner_token_hash) : null,
-    dedupe_key: row.dedupe_key ? String(row.dedupe_key) : null,
-    retry_count: Number(row.retry_count || 0),
-    max_retries: Number(row.max_retries ?? 2),
-    error_message: row.error_message ? String(row.error_message) : null,
-    expires_at: row.expires_at ? String(row.expires_at) : null,
-    created_at: String(row.created_at),
-    updated_at: String(row.updated_at),
-  };
-}
-
 export async function upgradeCompatibleSessionHashes(
   primaryHash: string,
   compatHashes: string[],
@@ -959,19 +513,10 @@ export async function upgradeCompatibleSessionHashes(
   if (!compatHashes || compatHashes.length === 0) return;
   const db = dbOverride || (await getDb());
   const placeholders = compatHashes.map(() => '?').join(', ');
-  await db.batch(
-    [
-      {
-        sql: `UPDATE links SET owner_token_hash = ? WHERE owner_token_hash IN (${placeholders})`,
-        args: [primaryHash, ...compatHashes],
-      },
-      {
-        sql: `UPDATE media_jobs SET session_token_hash = ? WHERE session_token_hash IN (${placeholders})`,
-        args: [primaryHash, ...compatHashes],
-      },
-    ],
-    'write'
-  );
+  await db.execute({
+    sql: `UPDATE links SET owner_token_hash = ? WHERE owner_token_hash IN (${placeholders})`,
+    args: [primaryHash, ...compatHashes],
+  });
 }
 
 export async function rotateOwnerSessionHash(
@@ -983,248 +528,8 @@ export async function rotateOwnerSessionHash(
   if (candidates.length === 0) return;
   const db = dbOverride || (await getDb());
   const placeholders = candidates.map(() => '?').join(', ');
-  await db.batch(
-    [
-      {
-        sql: `UPDATE links SET owner_token_hash = ? WHERE owner_token_hash IN (${placeholders})`,
-        args: [newOwnerHash, ...candidates],
-      },
-      {
-        sql: `UPDATE media_jobs SET session_token_hash = ? WHERE session_token_hash IN (${placeholders})`,
-        args: [newOwnerHash, ...candidates],
-      },
-    ],
-    'write'
-  );
-}
-
-export async function createMediaJob(
-  data: {
-    jobId: string;
-    module: MediaModule;
-    processingMode: ProcessingMode;
-    inputFilename: string;
-    inputMime: string;
-    inputSize: number;
-    outputFormat: string;
-    outputSize?: number | null;
-    status?: MediaJobStatus;
-    storageKey?: string | null;
-    outputStorageKey?: string | null;
-    ownerTokenHash?: string | null;
-    sessionTokenHash?: string | null;
-    dedupeKey?: string | null;
-    maxRetries?: number;
-    errorMessage?: string | null;
-    expiresAt?: string | null;
-  },
-  dbOverride?: Client
-): Promise<MediaJobRecord> {
-  const db = dbOverride || (await getDb());
   await db.execute({
-    sql: `INSERT INTO media_jobs (
-      job_id, module, processing_mode, input_filename, input_mime, input_size,
-      output_format, output_size, status, storage_key, output_storage_key,
-      owner_token_hash, session_token_hash, dedupe_key, retry_count, max_retries,
-      error_message, expires_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, datetime('now'), datetime('now'))`,
-    args: [
-      data.jobId,
-      data.module,
-      data.processingMode,
-      data.inputFilename,
-      data.inputMime,
-      data.inputSize,
-      data.outputFormat,
-      data.outputSize ?? null,
-      data.status || 'completed',
-      data.storageKey ?? null,
-      data.outputStorageKey ?? null,
-      data.ownerTokenHash ?? null,
-      data.sessionTokenHash ?? null,
-      data.dedupeKey ?? null,
-      data.maxRetries ?? 2,
-      data.errorMessage ?? null,
-      data.expiresAt ?? null,
-    ],
+    sql: `UPDATE links SET owner_token_hash = ? WHERE owner_token_hash IN (${placeholders})`,
+    args: [newOwnerHash, ...candidates],
   });
-
-  const job = await getMediaJobById(data.jobId, db);
-  if (!job) throw new Error('Failed to create media job record');
-  return job;
-}
-
-export async function findActiveJobByDedupeKey(
-  dedupeKey: string,
-  dbOverride?: Client
-): Promise<MediaJobRecord | null> {
-  const db = dbOverride || (await getDb());
-  const res = await db.execute({
-    sql: "SELECT * FROM media_jobs WHERE dedupe_key = ? AND status IN ('queued', 'processing') ORDER BY id DESC LIMIT 1",
-    args: [dedupeKey],
-  });
-  if (res.rows.length === 0) return null;
-  return mapMediaJobRow(res.rows[0]);
-}
-
-export async function claimNextQueuedJob(dbOverride?: Client): Promise<MediaJobRecord | null> {
-  const db = dbOverride || (await getDb());
-  const queued = await getQueuedMediaJobs(1, db);
-  if (queued.length === 0) return null;
-
-  const candidate = queued[0];
-  const updateRes = await db.execute({
-    sql: "UPDATE media_jobs SET status = 'processing', updated_at = datetime('now') WHERE job_id = ? AND status = 'queued'",
-    args: [candidate.job_id],
-  });
-
-  if ((updateRes.rowsAffected || 0) === 0) {
-    return null; // Claimed concurrently by another worker
-  }
-
-  return await getMediaJobById(candidate.job_id, db);
-}
-
-export async function failOrRetryMediaJob(
-  jobId: string,
-  errorMessage: string,
-  dbOverride?: Client
-): Promise<MediaJobRecord | null> {
-  const db = dbOverride || (await getDb());
-  const existing = await getMediaJobById(jobId, db);
-  if (!existing) return null;
-
-  const nextRetries = existing.retry_count + 1;
-  const shouldRetry = nextRetries <= existing.max_retries;
-  const nextStatus: MediaJobStatus = shouldRetry ? 'queued' : 'failed';
-
-  await db.execute({
-    sql: `UPDATE media_jobs
-      SET status = ?, retry_count = ?, error_message = ?, updated_at = datetime('now')
-      WHERE job_id = ?`,
-    args: [nextStatus, nextRetries, errorMessage, jobId],
-  });
-
-  return await getMediaJobById(jobId, db);
-}
-
-export async function markMediaJobExpired(
-  jobId: string,
-  dbOverride?: Client
-): Promise<void> {
-  const db = dbOverride || (await getDb());
-  await db.execute({
-    sql: "UPDATE media_jobs SET status = 'expired', storage_key = NULL, output_storage_key = NULL, updated_at = datetime('now') WHERE job_id = ?",
-    args: [jobId],
-  });
-}
-
-export async function updateMediaJob(
-  jobId: string,
-  updates: {
-    status?: MediaJobStatus;
-    outputSize?: number | null;
-    outputStorageKey?: string | null;
-    errorMessage?: string | null;
-  },
-  dbOverride?: Client
-): Promise<MediaJobRecord | null> {
-  const db = dbOverride || (await getDb());
-  const existing = await getMediaJobById(jobId, db);
-  if (!existing) return null;
-
-  await db.execute({
-    sql: `UPDATE media_jobs
-      SET status = ?, output_size = ?, output_storage_key = ?, error_message = ?, updated_at = datetime('now')
-      WHERE job_id = ?`,
-    args: [
-      updates.status ?? existing.status,
-      updates.outputSize !== undefined ? updates.outputSize : existing.output_size,
-      updates.outputStorageKey !== undefined ? updates.outputStorageKey : existing.output_storage_key,
-      updates.errorMessage !== undefined ? updates.errorMessage : existing.error_message,
-      jobId,
-    ],
-  });
-
-  return await getMediaJobById(jobId, db);
-}
-
-export async function getMediaJobById(jobId: string, dbOverride?: Client): Promise<MediaJobRecord | null> {
-  const db = dbOverride || (await getDb());
-  const res = await db.execute({
-    sql: 'SELECT * FROM media_jobs WHERE job_id = ? LIMIT 1',
-    args: [jobId],
-  });
-  if (res.rows.length === 0) return null;
-  return mapMediaJobRow(res.rows[0]);
-}
-
-export async function getRecentMediaJobs(
-  limit = 15,
-  sessionTokenHash?: string,
-  dbOverride?: Client
-): Promise<MediaJobRecord[]> {
-  const db = dbOverride || (await getDb());
-  const res = sessionTokenHash
-    ? await db.execute({
-        sql: 'SELECT * FROM media_jobs WHERE session_token_hash = ? ORDER BY id DESC LIMIT ?',
-        args: [sessionTokenHash, limit],
-      })
-    : await db.execute({
-        sql: 'SELECT * FROM media_jobs ORDER BY id DESC LIMIT ?',
-        args: [limit],
-      });
-  return res.rows.map(mapMediaJobRow);
-}
-
-export async function getQueuedMediaJobs(limit = 5, dbOverride?: Client): Promise<MediaJobRecord[]> {
-  const db = dbOverride || (await getDb());
-  const res = await db.execute({
-    sql: "SELECT * FROM media_jobs WHERE status = 'queued' ORDER BY id ASC LIMIT ?",
-    args: [limit],
-  });
-  return res.rows.map(mapMediaJobRow);
-}
-
-export async function getExpiredMediaJobs(dbOverride?: Client): Promise<MediaJobRecord[]> {
-  const db = dbOverride || (await getDb());
-  const res = await db.execute(
-    "SELECT * FROM media_jobs WHERE expires_at IS NOT NULL AND expires_at < datetime('now') AND status != 'expired'"
-  );
-  return res.rows.map(mapMediaJobRow);
-}
-
-export async function getStorageUsageSummary(
-  objectStorageConfigured: boolean,
-  sessionTokenHash?: string,
-  dbOverride?: Client
-): Promise<StorageUsageSummary> {
-  const db = dbOverride || (await getDb());
-  const whereClause = sessionTokenHash ? 'WHERE session_token_hash = ?' : '';
-  const args = sessionTokenHash ? [sessionTokenHash] : [];
-  const res = await db.execute({
-    sql: `
-    SELECT
-      COUNT(*) as total_jobs,
-      SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_jobs,
-      SUM(CASE WHEN status = 'queued' OR status = 'processing' THEN 1 ELSE 0 END) as queued_jobs,
-      COALESCE(SUM(input_size), 0) as total_input_bytes,
-      COALESCE(SUM(output_size), 0) as total_output_bytes,
-      COALESCE(SUM(CASE WHEN status IN ('queued', 'processing', 'completed') AND (storage_key IS NOT NULL OR output_storage_key IS NOT NULL) THEN COALESCE(input_size, 0) + COALESCE(output_size, 0) ELSE 0 END), 0) as active_storage_bytes
-    FROM media_jobs
-    ${whereClause}
-  `,
-    args,
-  });
-
-  const row = (res.rows[0] as any) || {};
-  return {
-    totalJobs: Number(row.total_jobs || 0),
-    completedJobs: Number(row.completed_jobs || 0),
-    queuedJobs: Number(row.queued_jobs || 0),
-    totalInputBytes: Number(row.total_input_bytes || 0),
-    totalOutputBytes: Number(row.total_output_bytes || 0),
-    activeStorageBytes: Number(row.active_storage_bytes || 0),
-    objectStorageConfigured,
-  };
 }
