@@ -160,7 +160,7 @@ export const AiThumbnailGenerator: React.FC<AiThumbnailGeneratorProps> = ({ init
           AI YouTube Thumbnail Generator
         </h1>
         <p className="text-sm text-zinc-400">
-          Generate custom 16:9 background artwork via NVIDIA FLUX.1-dev, then add crisp headlines, gradients, and logos in the editor.
+          Generate custom thumbnail backgrounds via NVIDIA FLUX.1-dev, then frame, caption, and export cleanly at 1280&times;720 (16:9).
         </p>
       </div>
 
@@ -250,11 +250,11 @@ export const AiThumbnailGenerator: React.FC<AiThumbnailGeneratorProps> = ({ init
               >
                 {(
                   config?.resolutions || [
-                    { id: '1344x768', label: '1344 × 768 (16:9 Widescreen)' },
+                    { id: '1344x768', label: '1344 × 768 (7:4 Widescreen · fits 1280×720)' },
                     { id: '1280x768', label: '1280 × 768 (5:3 Landscape)' },
                     { id: '1216x832', label: '1216 × 832 (3:2 Landscape)' },
                     { id: '1024x1024', label: '1024 × 1024 (1:1 Square)' },
-                    { id: '768x1344', label: '768 × 1344 (9:16 Vertical)' },
+                    { id: '768x1344', label: '768 × 1344 (4:7 Vertical)' },
                   ]
                 ).map((r) => (
                   <option key={r.id} value={r.id}>
@@ -390,12 +390,17 @@ export const AiThumbnailGenerator: React.FC<AiThumbnailGeneratorProps> = ({ init
             </div>
           </div>
 
-          <div className="rounded-xl overflow-hidden border border-zinc-800 bg-zinc-950 max-w-2xl">
-            <img
-              src={generated.dataUrl}
-              alt="Generated FLUX thumbnail background"
-              className="w-full h-auto block"
-            />
+          <div className="space-y-2">
+            <div className="rounded-xl overflow-hidden border border-zinc-800 bg-zinc-950 max-w-2xl">
+              <img
+                src={generated.dataUrl}
+                alt="Generated FLUX thumbnail background"
+                className="w-full h-auto block"
+              />
+            </div>
+            <p className="text-[11px] text-zinc-500">
+              Native {generated.width}&times;{generated.height} preview (aspect preserved). Use the 1280&times;720 editor below to crop or fit with blur backdrop and add headlines.
+            </p>
           </div>
         </div>
       )}

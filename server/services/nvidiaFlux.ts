@@ -13,7 +13,7 @@ export type FluxResolutionId = '1344x768' | '1280x768' | '1216x832' | '1024x1024
 export interface FluxResolutionSpec {
   id: FluxResolutionId;
   label: string;
-  aspectRatio: '16:9' | '5:3' | '3:2' | '1:1' | '9:16';
+  aspectRatio: '7:4' | '5:3' | '3:2' | '1:1' | '4:7';
   width: number;
   height: number;
 }
@@ -21,11 +21,11 @@ export interface FluxResolutionSpec {
 // Width and height must strictly match the official NVIDIA NIM FLUX.1-dev integer enum:
 // [768, 832, 896, 960, 1024, 1088, 1152, 1216, 1280, 1344]
 export const FLUX_RESOLUTIONS: Record<FluxResolutionId, FluxResolutionSpec> = {
-  '1344x768': { id: '1344x768', label: '1344 × 768 (16:9 Widescreen)', aspectRatio: '16:9', width: 1344, height: 768 },
+  '1344x768': { id: '1344x768', label: '1344 × 768 (7:4 Widescreen · fits 1280×720)', aspectRatio: '7:4', width: 1344, height: 768 },
   '1280x768': { id: '1280x768', label: '1280 × 768 (5:3 Landscape)', aspectRatio: '5:3', width: 1280, height: 768 },
   '1216x832': { id: '1216x832', label: '1216 × 832 (3:2 Landscape)', aspectRatio: '3:2', width: 1216, height: 832 },
   '1024x1024': { id: '1024x1024', label: '1024 × 1024 (1:1 Square)', aspectRatio: '1:1', width: 1024, height: 1024 },
-  '768x1344': { id: '768x1344', label: '768 × 1344 (9:16 Vertical)', aspectRatio: '9:16', width: 768, height: 1344 },
+  '768x1344': { id: '768x1344', label: '768 × 1344 (4:7 Vertical)', aspectRatio: '4:7', width: 768, height: 1344 },
 };
 
 const PRESET_ENHANCERS: Record<ThumbnailStylePreset, string> = {

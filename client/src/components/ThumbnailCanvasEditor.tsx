@@ -11,6 +11,12 @@ import {
   AlignCenter,
   AlignRight,
 } from 'lucide-react';
+import {
+  BackgroundFitMode,
+  CropFocus,
+  computeBackgroundPlacement,
+  recommendBackgroundFitMode,
+} from '../utils/thumbnailFit';
 
 type GradientPreset = 'none' | 'left-dark' | 'bottom-dark' | 'vignette' | 'red-dark';
 
@@ -76,6 +82,8 @@ export const ThumbnailCanvasEditor: React.FC<ThumbnailCanvasEditorProps> = ({
   suggestedHeadline,
 }) => {
   const [bgImg, setBgImg] = useState<HTMLImageElement | null>(null);
+  const [fitMode, setFitMode] = useState<BackgroundFitMode>('cover');
+  const [cropFocus, setCropFocus] = useState<CropFocus>('center');
   const [gradientPreset, setGradientPreset] = useState<GradientPreset>('left-dark');
   const [gradientOpacity, setGradientOpacity] = useState<number>(0.65);
 
@@ -108,7 +116,11 @@ export const ThumbnailCanvasEditor: React.FC<ThumbnailCanvasEditorProps> = ({
     }
     const img = new Image();
     img.crossOrigin = 'anonymous';
-    img.onload = () => setBgImg(img);
+    img.onload = () => {
+      setBgImg(img);
+      setFitMode(recommendBackgroundFitMode(img.naturalWidth, img.naturalHeight));
+      setCropFocus('center');
+    };
     img.src = backgroundDataUrl;
   }, [backgroundDataUrl]);
 
@@ -127,25 +139,39 @@ export const ThumbnailCanvasEditor: React.FC<ThumbnailCanvasEditorProps> = ({
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
-      // 1. Background fill / cover image
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+
+      // 1. Background fill / cover or blurred-backdrop contain (never stretches aspect ratio)
       ctx.fillStyle = '#09090b';
       ctx.fillRect(0, 0, w, h);
 
-      if (bgImg && bgImg.naturalWidth > 0) {
-        const imgAspect = bgImg.naturalWidth / bgImg.naturalHeight;
-        const canvasAspect = w / h;
-        let dw = w;
-        let dh = h;
-        let dx = 0;
-        let dy = 0;
-        if (imgAspect > canvasAspect) {
-          dw = h * imgAspect;
-          dx = (w - dw) / 2;
-        } else {
-          dh = w / imgAspect;
-          dy = (h - dh) / 2;
+      if (bgImg && bgImg.naturalWidth > 0 && bgImg.naturalHeight > 0) {
+        const placement = computeBackgroundPlacement(
+          bgImg.naturalWidth,
+          bgImg.naturalHeight,
+          w,
+          h,
+          fitMode,
+          cropFocus
+        );
+        if (placement.backdropRect) {
+          ctx.save();
+          ctx.filter = 'blur(28px) brightness(0.55)';
+          const b = placement.backdropRect;
+          ctx.drawImage(bgImg, b.x, b.y, b.width, b.height);
+          ctx.restore();
         }
-        ctx.drawImage(bgImg, dx, dy, dw, dh);
+        const f = placement.foregroundRect;
+        if (placement.fitMode === 'contain-blur') {
+          ctx.save();
+          ctx.shadowColor = 'rgba(0,0,0,0.45)';
+          ctx.shadowBlur = 32;
+          ctx.drawImage(bgImg, f.x, f.y, f.width, f.height);
+          ctx.restore();
+        } else {
+          ctx.drawImage(bgImg, f.x, f.y, f.width, f.height);
+        }
       } else {
         const bgGrad = ctx.createLinearGradient(0, 0, w, h);
         bgGrad.addColorStop(0, '#18181b');
@@ -247,7 +273,7 @@ export const ThumbnailCanvasEditor: React.FC<ThumbnailCanvasEditorProps> = ({
         ctx.restore();
       }
     },
-    [bgImg, gradientPreset, gradientOpacity, layers]
+    [bgImg, fitMode, cropFocus, gradientPreset, gradientOpacity, layers]
   );
 
   useEffect(() => {
@@ -260,6 +286,7 @@ export const ThumbnailCanvasEditor: React.FC<ThumbnailCanvasEditorProps> = ({
     const canvas = canvasRef.current;
     if (!canvas || !selectedLayer) return;
     const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
     const clickXPct = ((e.clientX - rect.left) / rect.width) * 100;
     const clickYPct = ((e.clientY - rect.top) / rect.height) * 100;
     draggingRef.current = {
@@ -275,6 +302,7 @@ export const ThumbnailCanvasEditor: React.FC<ThumbnailCanvasEditorProps> = ({
     const canvas = canvasRef.current;
     if (!drag || !canvas) return;
     const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
     const xp = Math.max(-10, Math.min(95, ((e.clientX - rect.left) / rect.width) * 100 - drag.offsetX));
     const yp = Math.max(-10, Math.min(95, ((e.clientY - rect.top) / rect.height) * 100 - drag.offsetY));
     updateLayer(drag.layerId, { xPct: Math.round(xp * 10) / 10, yPct: Math.round(yp * 10) / 10 });
@@ -379,9 +407,11 @@ export const ThumbnailCanvasEditor: React.FC<ThumbnailCanvasEditorProps> = ({
             Thumbnail Headline &amp; Layout Editor
           </h3>
           <p className="text-xs text-zinc-400">
-            Select a layer and drag directly on the canvas to position. Final typography renders cleanly via Canvas at 1280 &times; 720.
-            {sourceWidth < 1280 && sourceHeight < 720
-              ? ` (Source is ${sourceWidth}×${sourceHeight}; export scales to 1280×720)`
+            Preview and PNG/JPEG export share an identical 1280 &times; 720 (16:9) coordinate canvas with zero image stretching.
+            {bgImg?.naturalWidth
+              ? ` (Source: ${bgImg.naturalWidth}×${bgImg.naturalHeight})`
+              : sourceWidth && sourceHeight
+              ? ` (Source: ${sourceWidth}×${sourceHeight})`
               : ''}
           </p>
         </div>
@@ -415,7 +445,8 @@ export const ThumbnailCanvasEditor: React.FC<ThumbnailCanvasEditorProps> = ({
               onPointerDown={handleCanvasPointerDown}
               onPointerMove={handleCanvasPointerMove}
               onPointerUp={handleCanvasPointerUp}
-              className="w-full h-auto block cursor-move touch-none"
+              onPointerCancel={handleCanvasPointerUp}
+              className="w-full h-auto aspect-video block cursor-move touch-none"
             />
           </div>
 
@@ -453,6 +484,43 @@ export const ThumbnailCanvasEditor: React.FC<ThumbnailCanvasEditorProps> = ({
 
         {/* Layer Inspector */}
         <div className="lg:col-span-5 space-y-4">
+          {/* Background Fit & Framing (never stretches aspect ratio) */}
+          {bgImg && (
+            <div className="p-3.5 rounded-xl bg-zinc-950/70 border border-zinc-800 space-y-2.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-zinc-300">Background Fit (1280&times;720)</span>
+                <span className="font-mono text-zinc-500">
+                  {bgImg.naturalWidth}&times;{bgImg.naturalHeight}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <select
+                  value={fitMode}
+                  onChange={(e) => setFitMode(e.target.value as BackgroundFitMode)}
+                  className="px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-zinc-200"
+                >
+                  <option value="cover">Crop to Fill (16:9)</option>
+                  <option value="contain-blur">Fit Whole Image (Blur Backdrop)</option>
+                </select>
+                {fitMode === 'cover' ? (
+                  <select
+                    value={cropFocus}
+                    onChange={(e) => setCropFocus(e.target.value as CropFocus)}
+                    className="px-2.5 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-zinc-200"
+                  >
+                    <option value="top">Crop Focus: Top</option>
+                    <option value="center">Crop Focus: Center</option>
+                    <option value="bottom">Crop Focus: Bottom</option>
+                  </select>
+                ) : (
+                  <div className="px-2.5 py-1.5 rounded-lg bg-zinc-900/50 border border-zinc-800/70 text-[11px] text-zinc-400 flex items-center">
+                    No crop &bull; Aspect locked
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Contrast Gradient Scrim */}
           <div className="p-3.5 rounded-xl bg-zinc-950/70 border border-zinc-800 space-y-2.5">
             <div className="flex items-center justify-between text-xs">

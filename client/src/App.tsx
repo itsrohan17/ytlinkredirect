@@ -84,7 +84,7 @@ export const App: React.FC = () => {
                 </div>
                 <h2 className="text-sm font-bold text-white">AI Thumbnail Generator</h2>
                 <p className="text-xs text-zinc-400 mt-1">
-                  Create 16:9 thumbnail artwork with NVIDIA FLUX.1-dev and customize headlines cleanly.
+                  Generate custom thumbnail backgrounds with NVIDIA FLUX.1-dev and export 1280&times;720 YouTube covers cleanly.
                 </p>
               </button>
             </div>

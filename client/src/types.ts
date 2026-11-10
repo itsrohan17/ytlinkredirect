@@ -94,7 +94,7 @@ export type FluxResolutionId = '1344x768' | '1280x768' | '1216x832' | '1024x1024
 export interface AiResolutionOption {
   id: FluxResolutionId;
   label: string;
-  aspectRatio: '16:9' | '1:1' | '9:16';
+  aspectRatio: '7:4' | '5:3' | '3:2' | '1:1' | '4:7';
   width: number;
   height: number;
 }

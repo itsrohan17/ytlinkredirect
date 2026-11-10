@@ -5,6 +5,7 @@ import path from 'path';
 import { app } from '../server/app.js';
 import { initDb } from '../server/db.js';
 import { buildNvidiaInvokeUrl, getConfiguredNvidiaModel } from '../server/services/nvidiaFlux.js';
+import { computeBackgroundPlacement, recommendBackgroundFitMode } from '../client/src/utils/thumbnailFit.js';
 
 async function runSimplifiedAndAiTests() {
   console.log('=== STARTING SIMPLIFIED LINKTWIN + NVIDIA FLUX TESTS ===');
@@ -122,6 +123,11 @@ async function runSimplifiedAndAiTests() {
     assert.strictEqual(cfgNoKey.configured, false);
     assert.strictEqual(cfgNoKey.model, 'black-forest-labs/flux.1-dev');
     assert.strictEqual(cfgNoKey.defaultResolution, '1344x768');
+    const defaultResSpec = cfgNoKey.resolutions.find((r: any) => r.id === '1344x768');
+    assert.strictEqual(defaultResSpec.aspectRatio, '7:4');
+    assert.ok(!String(defaultResSpec.label).includes('(16:9'), '1344x768 must not be labeled exact 16:9');
+    const vertResSpec = cfgNoKey.resolutions.find((r: any) => r.id === '768x1344');
+    assert.strictEqual(vertResSpec.aspectRatio, '4:7');
 
     const missKeyRes = await fetch(`${base}/api/ai/thumbnail`, {
       method: 'POST',
@@ -320,6 +326,34 @@ async function runSimplifiedAndAiTests() {
       }
     }
     console.log('[Pass 7] Zero secrets or NVIDIA_API_KEY references verified inside dist-client bundles');
+
+    // 8. Canvas 1280x720 Export Aspect-Preservation (zero distortion across all 5 FLUX resolutions)
+    assert.strictEqual(recommendBackgroundFitMode(1344, 768), 'cover');
+    assert.strictEqual(recommendBackgroundFitMode(1024, 1024), 'contain-blur');
+    assert.strictEqual(recommendBackgroundFitMode(768, 1344), 'contain-blur');
+
+    for (const [iw, ih] of [
+      [1344, 768],
+      [1280, 768],
+      [1216, 832],
+      [1024, 1024],
+      [768, 1344],
+    ]) {
+      const natAspect = iw / ih;
+      const cover = computeBackgroundPlacement(iw, ih, 1280, 720, 'cover', 'center');
+      assert.ok(cover.foregroundRect.width >= 1280 - 1e-6 && cover.foregroundRect.height >= 720 - 1e-6);
+      assert.ok(Math.abs(cover.foregroundRect.width / cover.foregroundRect.height - natAspect) < 1e-6);
+
+      const contain = computeBackgroundPlacement(iw, ih, 1280, 720, 'contain-blur', 'center');
+      assert.ok(contain.backdropRect !== null);
+      assert.ok(contain.foregroundRect.width <= 1280 + 1e-6 && contain.foregroundRect.height <= 720 + 1e-6);
+      assert.ok(Math.abs(contain.foregroundRect.width / contain.foregroundRect.height - natAspect) < 1e-6);
+    }
+    const topCrop = computeBackgroundPlacement(768, 1344, 1280, 720, 'cover', 'top');
+    const bottomCrop = computeBackgroundPlacement(768, 1344, 1280, 720, 'cover', 'bottom');
+    assert.strictEqual(topCrop.foregroundRect.y, 0);
+    assert.ok(bottomCrop.foregroundRect.y < 0);
+    console.log('[Pass 8] Canvas 1280x720 aspect preservation & cover/blur fitting verified');
 
     console.log('\n🎉 ALL SIMPLIFIED LINKTWIN + NVIDIA FLUX TESTS PASSED!');
   } finally {
