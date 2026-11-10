@@ -6,8 +6,13 @@ import {
   ContentType,
   LinkRecord,
   LinkStats,
+  MediaJobRecord,
+  MediaJobStatus,
+  MediaModule,
   Platform,
   PlatformAnalyticsSummary,
+  ProcessingMode,
+  StorageUsageSummary,
 } from './types.js';
 
 let client: Client | null = null;
@@ -117,6 +122,42 @@ export async function initDb(customDbPath?: string): Promise<Client> {
 
   await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_links_platform ON links(platform);`);
   await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_clicks_platform ON clicks(platform);`);
+
+  // Media Studio job metadata table (stores metadata & object storage references only, never binaries)
+  await activeClient.execute(`
+    CREATE TABLE IF NOT EXISTS media_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id TEXT UNIQUE NOT NULL,
+      module TEXT NOT NULL,
+      processing_mode TEXT NOT NULL,
+      input_filename TEXT NOT NULL,
+      input_mime TEXT NOT NULL,
+      input_size INTEGER NOT NULL,
+      output_format TEXT NOT NULL,
+      output_size INTEGER,
+      status TEXT NOT NULL DEFAULT 'completed',
+      storage_key TEXT,
+      output_storage_key TEXT,
+      owner_token_hash TEXT,
+      dedupe_key TEXT,
+      retry_count INTEGER DEFAULT 0,
+      max_retries INTEGER DEFAULT 2,
+      error_message TEXT,
+      expires_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await ensureColumn(activeClient, 'media_jobs', 'owner_token_hash', 'TEXT');
+  await ensureColumn(activeClient, 'media_jobs', 'dedupe_key', 'TEXT');
+  await ensureColumn(activeClient, 'media_jobs', 'retry_count', 'INTEGER DEFAULT 0');
+  await ensureColumn(activeClient, 'media_jobs', 'max_retries', 'INTEGER DEFAULT 2');
+
+  await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_media_jobs_job_id ON media_jobs(job_id);`);
+  await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_media_jobs_status ON media_jobs(status);`);
+  await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_media_jobs_expires ON media_jobs(expires_at);`);
+  await activeClient.execute(`CREATE INDEX IF NOT EXISTS idx_media_jobs_dedupe ON media_jobs(dedupe_key);`);
 
   if (!customDbPath) {
     client = activeClient;
@@ -423,4 +464,242 @@ export async function getRecentLinks(limit = 10, dbOverride?: Client): Promise<L
   });
 
   return res.rows.map(mapLinkRow);
+}
+
+function mapMediaJobRow(row: any): MediaJobRecord {
+  return {
+    id: Number(row.id),
+    job_id: String(row.job_id),
+    module: String(row.module) as MediaModule,
+    processing_mode: String(row.processing_mode) as ProcessingMode,
+    input_filename: String(row.input_filename),
+    input_mime: String(row.input_mime),
+    input_size: Number(row.input_size || 0),
+    output_format: String(row.output_format),
+    output_size: row.output_size !== null && row.output_size !== undefined ? Number(row.output_size) : null,
+    status: String(row.status) as MediaJobStatus,
+    storage_key: row.storage_key ? String(row.storage_key) : null,
+    output_storage_key: row.output_storage_key ? String(row.output_storage_key) : null,
+    owner_token_hash: row.owner_token_hash ? String(row.owner_token_hash) : null,
+    dedupe_key: row.dedupe_key ? String(row.dedupe_key) : null,
+    retry_count: Number(row.retry_count || 0),
+    max_retries: Number(row.max_retries ?? 2),
+    error_message: row.error_message ? String(row.error_message) : null,
+    expires_at: row.expires_at ? String(row.expires_at) : null,
+    created_at: String(row.created_at),
+    updated_at: String(row.updated_at),
+  };
+}
+
+export async function createMediaJob(
+  data: {
+    jobId: string;
+    module: MediaModule;
+    processingMode: ProcessingMode;
+    inputFilename: string;
+    inputMime: string;
+    inputSize: number;
+    outputFormat: string;
+    outputSize?: number | null;
+    status?: MediaJobStatus;
+    storageKey?: string | null;
+    outputStorageKey?: string | null;
+    ownerTokenHash?: string | null;
+    dedupeKey?: string | null;
+    maxRetries?: number;
+    errorMessage?: string | null;
+    expiresAt?: string | null;
+  },
+  dbOverride?: Client
+): Promise<MediaJobRecord> {
+  const db = dbOverride || (await getDb());
+  await db.execute({
+    sql: `INSERT INTO media_jobs (
+      job_id, module, processing_mode, input_filename, input_mime, input_size,
+      output_format, output_size, status, storage_key, output_storage_key,
+      owner_token_hash, dedupe_key, retry_count, max_retries,
+      error_message, expires_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, datetime('now'), datetime('now'))`,
+    args: [
+      data.jobId,
+      data.module,
+      data.processingMode,
+      data.inputFilename,
+      data.inputMime,
+      data.inputSize,
+      data.outputFormat,
+      data.outputSize ?? null,
+      data.status || 'completed',
+      data.storageKey ?? null,
+      data.outputStorageKey ?? null,
+      data.ownerTokenHash ?? null,
+      data.dedupeKey ?? null,
+      data.maxRetries ?? 2,
+      data.errorMessage ?? null,
+      data.expiresAt ?? null,
+    ],
+  });
+
+  const job = await getMediaJobById(data.jobId, db);
+  if (!job) throw new Error('Failed to create media job record');
+  return job;
+}
+
+export async function findActiveJobByDedupeKey(
+  dedupeKey: string,
+  dbOverride?: Client
+): Promise<MediaJobRecord | null> {
+  const db = dbOverride || (await getDb());
+  const res = await db.execute({
+    sql: "SELECT * FROM media_jobs WHERE dedupe_key = ? AND status IN ('queued', 'processing') ORDER BY id DESC LIMIT 1",
+    args: [dedupeKey],
+  });
+  if (res.rows.length === 0) return null;
+  return mapMediaJobRow(res.rows[0]);
+}
+
+export async function claimNextQueuedJob(dbOverride?: Client): Promise<MediaJobRecord | null> {
+  const db = dbOverride || (await getDb());
+  const queued = await getQueuedMediaJobs(1, db);
+  if (queued.length === 0) return null;
+
+  const candidate = queued[0];
+  const updateRes = await db.execute({
+    sql: "UPDATE media_jobs SET status = 'processing', updated_at = datetime('now') WHERE job_id = ? AND status = 'queued'",
+    args: [candidate.job_id],
+  });
+
+  if ((updateRes.rowsAffected || 0) === 0) {
+    return null; // Claimed concurrently by another worker
+  }
+
+  return await getMediaJobById(candidate.job_id, db);
+}
+
+export async function failOrRetryMediaJob(
+  jobId: string,
+  errorMessage: string,
+  dbOverride?: Client
+): Promise<MediaJobRecord | null> {
+  const db = dbOverride || (await getDb());
+  const existing = await getMediaJobById(jobId, db);
+  if (!existing) return null;
+
+  const nextRetries = existing.retry_count + 1;
+  const shouldRetry = nextRetries <= existing.max_retries;
+  const nextStatus: MediaJobStatus = shouldRetry ? 'queued' : 'failed';
+
+  await db.execute({
+    sql: `UPDATE media_jobs
+      SET status = ?, retry_count = ?, error_message = ?, updated_at = datetime('now')
+      WHERE job_id = ?`,
+    args: [nextStatus, nextRetries, errorMessage, jobId],
+  });
+
+  return await getMediaJobById(jobId, db);
+}
+
+export async function markMediaJobExpired(
+  jobId: string,
+  dbOverride?: Client
+): Promise<void> {
+  const db = dbOverride || (await getDb());
+  await db.execute({
+    sql: "UPDATE media_jobs SET status = 'expired', storage_key = NULL, output_storage_key = NULL, updated_at = datetime('now') WHERE job_id = ?",
+    args: [jobId],
+  });
+}
+
+export async function updateMediaJob(
+  jobId: string,
+  updates: {
+    status?: MediaJobStatus;
+    outputSize?: number | null;
+    outputStorageKey?: string | null;
+    errorMessage?: string | null;
+  },
+  dbOverride?: Client
+): Promise<MediaJobRecord | null> {
+  const db = dbOverride || (await getDb());
+  const existing = await getMediaJobById(jobId, db);
+  if (!existing) return null;
+
+  await db.execute({
+    sql: `UPDATE media_jobs
+      SET status = ?, output_size = ?, output_storage_key = ?, error_message = ?, updated_at = datetime('now')
+      WHERE job_id = ?`,
+    args: [
+      updates.status ?? existing.status,
+      updates.outputSize !== undefined ? updates.outputSize : existing.output_size,
+      updates.outputStorageKey !== undefined ? updates.outputStorageKey : existing.output_storage_key,
+      updates.errorMessage !== undefined ? updates.errorMessage : existing.error_message,
+      jobId,
+    ],
+  });
+
+  return await getMediaJobById(jobId, db);
+}
+
+export async function getMediaJobById(jobId: string, dbOverride?: Client): Promise<MediaJobRecord | null> {
+  const db = dbOverride || (await getDb());
+  const res = await db.execute({
+    sql: 'SELECT * FROM media_jobs WHERE job_id = ? LIMIT 1',
+    args: [jobId],
+  });
+  if (res.rows.length === 0) return null;
+  return mapMediaJobRow(res.rows[0]);
+}
+
+export async function getRecentMediaJobs(limit = 15, dbOverride?: Client): Promise<MediaJobRecord[]> {
+  const db = dbOverride || (await getDb());
+  const res = await db.execute({
+    sql: 'SELECT * FROM media_jobs ORDER BY id DESC LIMIT ?',
+    args: [limit],
+  });
+  return res.rows.map(mapMediaJobRow);
+}
+
+export async function getQueuedMediaJobs(limit = 5, dbOverride?: Client): Promise<MediaJobRecord[]> {
+  const db = dbOverride || (await getDb());
+  const res = await db.execute({
+    sql: "SELECT * FROM media_jobs WHERE status = 'queued' ORDER BY id ASC LIMIT ?",
+    args: [limit],
+  });
+  return res.rows.map(mapMediaJobRow);
+}
+
+export async function getExpiredMediaJobs(dbOverride?: Client): Promise<MediaJobRecord[]> {
+  const db = dbOverride || (await getDb());
+  const res = await db.execute(
+    "SELECT * FROM media_jobs WHERE expires_at IS NOT NULL AND expires_at < datetime('now') AND status != 'expired'"
+  );
+  return res.rows.map(mapMediaJobRow);
+}
+
+export async function getStorageUsageSummary(
+  objectStorageConfigured: boolean,
+  dbOverride?: Client
+): Promise<StorageUsageSummary> {
+  const db = dbOverride || (await getDb());
+  const res = await db.execute(`
+    SELECT
+      COUNT(*) as total_jobs,
+      SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_jobs,
+      SUM(CASE WHEN status = 'queued' OR status = 'processing' THEN 1 ELSE 0 END) as queued_jobs,
+      COALESCE(SUM(input_size), 0) as total_input_bytes,
+      COALESCE(SUM(output_size), 0) as total_output_bytes,
+      COALESCE(SUM(CASE WHEN status IN ('queued', 'processing', 'completed') AND (storage_key IS NOT NULL OR output_storage_key IS NOT NULL) THEN COALESCE(input_size, 0) + COALESCE(output_size, 0) ELSE 0 END), 0) as active_storage_bytes
+    FROM media_jobs
+  `);
+
+  const row = (res.rows[0] as any) || {};
+  return {
+    totalJobs: Number(row.total_jobs || 0),
+    completedJobs: Number(row.completed_jobs || 0),
+    queuedJobs: Number(row.queued_jobs || 0),
+    totalInputBytes: Number(row.total_input_bytes || 0),
+    totalOutputBytes: Number(row.total_output_bytes || 0),
+    activeStorageBytes: Number(row.active_storage_bytes || 0),
+    objectStorageConfigured,
+  };
 }

@@ -3,14 +3,14 @@ import { initDb, getRecentLinks } from '../server/db.js';
 
 async function verifyMigration() {
   console.log('=== TESTING NON-DESTRUCTIVE DATABASE MIGRATION ===');
-  const backupPath = 'data/app.backup.db';
+  const sourcePath = fs.existsSync('data/app.backup.db') ? 'data/app.backup.db' : 'data/app.db';
   const testPath = 'data/app.test-migration.db';
 
-  if (!fs.existsSync(backupPath)) {
-    throw new Error('Backup DB not found for migration test');
+  if (!fs.existsSync(sourcePath)) {
+    throw new Error('Source DB not found for migration test');
   }
 
-  fs.copyFileSync(backupPath, testPath);
+  fs.copyFileSync(sourcePath, testPath);
 
   let db: any = null;
   try {

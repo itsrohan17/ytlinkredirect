@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import { getLinkByCode } from './db.js';
 import { linksRouter } from './routes/links.js';
 import { mediaRouter } from './routes/media.js';
+import { jobsRouter } from './routes/jobs.js';
 import { handleSmartRedirect } from './redirect.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -59,6 +60,10 @@ app.get('/api/health', (_req, res) => {
   res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
+// Mount jobsRouter on /api/jobs and /jobs
+app.use('/api/jobs', linkCreateLimiter, jobsRouter);
+app.use('/jobs', linkCreateLimiter, jobsRouter);
+
 // Mount mediaRouter on /api/media and /media
 app.use('/api/media', linkCreateLimiter, mediaRouter);
 app.use('/media', linkCreateLimiter, mediaRouter);
@@ -84,6 +89,7 @@ app.get('/:code', async (req, res, next) => {
     code === 'recent' ||
     code === 'links' ||
     code === 'media' ||
+    code === 'jobs' ||
     code === 'summary'
   ) {
     return next();
@@ -115,7 +121,12 @@ if (fs.existsSync(clientDistPath) && !process.env.VERCEL) {
 
 // Global 404 handler for API routes - ALWAYS returns JSON
 app.use((req, res, next) => {
-  if (req.path.startsWith('/api') || req.path.startsWith('/links') || req.path.startsWith('/media')) {
+  if (
+    req.path.startsWith('/api') ||
+    req.path.startsWith('/links') ||
+    req.path.startsWith('/media') ||
+    req.path.startsWith('/jobs')
+  ) {
     return res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.originalUrl}` });
   }
   next();

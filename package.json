@@ -11,16 +11,21 @@
     "build:client": "vite build --config client/vite.config.ts",
     "build:server": "tsc",
     "build": "npm run build:client && npm run build:server",
-    "start": "node dist-server/server/index.js"
+    "start": "node dist-server/server/index.js",
+    "worker": "tsx worker/mediaWorker.ts"
   },
   "dependencies": {
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2",
     "@libsql/client": "^0.18.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "express-rate-limit": "^7.5.0",
     "helmet": "^8.0.0",
+    "jszip": "^3.10.2",
     "nanoid": "^3.3.8",
+    "pdf-lib": "^1.17.1",
     "sql.js": "^1.12.0",
     "ua-parser-js": "^2.0.0"
   },

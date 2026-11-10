@@ -114,3 +114,47 @@ export interface PlatformAnalyticsSummary {
   topBrowsers: Record<string, number>;
   topReferrers: Record<string, number>;
 }
+
+export type MediaModule =
+  | 'video-converter'
+  | 'image-studio'
+  | 'thumbnail-studio'
+  | 'audio-studio'
+  | 'file-compressor';
+
+export type MediaJobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'expired';
+
+export type ProcessingMode = 'browser-wasm' | 'browser-canvas' | 'server-worker';
+
+export interface MediaJobRecord {
+  id: number;
+  job_id: string;
+  module: MediaModule;
+  processing_mode: ProcessingMode;
+  input_filename: string;
+  input_mime: string;
+  input_size: number;
+  output_format: string;
+  output_size: number | null;
+  status: MediaJobStatus;
+  storage_key: string | null;
+  output_storage_key: string | null;
+  owner_token_hash: string | null;
+  dedupe_key: string | null;
+  retry_count: number;
+  max_retries: number;
+  error_message: string | null;
+  expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StorageUsageSummary {
+  totalJobs: number;
+  completedJobs: number;
+  queuedJobs: number;
+  totalInputBytes: number;
+  totalOutputBytes: number;
+  activeStorageBytes: number;
+  objectStorageConfigured: boolean;
+}
